@@ -10,12 +10,24 @@ export interface FailingCheck {
   url: string | null;
 }
 
+/** The open PR whose branch this one is based on. */
+export interface StackRef {
+  number: number;
+  title: string;
+  url: string;
+}
+
 export interface Pr {
   id: string;
   number: number;
   title: string;
   url: string;
   repo: string;
+  author: string;
+  baseRefName: string;
+  /** False when the PR targets another branch rather than the repo's default. */
+  onDefaultBranch: boolean;
+  stackedOn: StackRef | null;
   isDraft: boolean;
   createdAt: string;
   updatedAt: string;
@@ -40,13 +52,17 @@ const CHECK_RUN = `name status conclusion detailsUrl startedAt
 
 const BASE = `
   id number title url isDraft createdAt updatedAt mergedAt closedAt
-  repository { nameWithOwner }`;
+  author { login } baseRefName
+  repository { nameWithOwner defaultBranchRef { name } }`;
+
+// The PR whose head branch is this PR's base: the PR below it in a stack.
+const STACK = "baseRef { associatedPullRequests(first: 1, states: OPEN) { nodes { number title url } } }";
 
 // shortcut: only the first 100 review threads and check contexts per PR are
 // read; paginate them if a PR ever needs more for an exact count.
 const OPEN_DETAILS = `
-  reviewDecision mergeable
-  reviewThreads(first: 100) { nodes { isResolved } }
+  reviewDecision mergeable ${STACK}
+  reviewThreads(first: 100) { nodes { isResolved comments(first: 1) { nodes { state } } } }
   commits(last: 1) { nodes { commit { statusCheckRollup {
     state
     contexts(first: 100) { nodes {
@@ -57,9 +73,16 @@ const OPEN_DETAILS = `
   } } } }`;
 
 const MINE = "is:pr author:@me archived:false sort:updated-desc";
+const OPEN_PRS = "is:pr is:open archived:false sort:updated-desc";
 
 export const PRS_QUERY = `query {
   open: search(query: "${MINE} is:open", type: ISSUE, first: 50) {
+    issueCount nodes { ... on PullRequest { ${BASE} ${OPEN_DETAILS} } }
+  }
+  review: search(query: "${OPEN_PRS} review-requested:@me", type: ISSUE, first: 50) {
+    issueCount nodes { ... on PullRequest { ${BASE} ${OPEN_DETAILS} } }
+  }
+  assigned: search(query: "${OPEN_PRS} assignee:@me", type: ISSUE, first: 50) {
     issueCount nodes { ... on PullRequest { ${BASE} ${OPEN_DETAILS} } }
   }
   merged: search(query: "${MINE} is:merged", type: ISSUE, first: 30) {
@@ -108,10 +131,13 @@ export interface RawPr {
   updatedAt: string;
   mergedAt: string | null;
   closedAt: string | null;
-  repository: { nameWithOwner: string };
+  author?: { login: string } | null;
+  baseRefName?: string;
+  repository: { nameWithOwner: string; defaultBranchRef?: { name: string } | null };
+  baseRef?: { associatedPullRequests: { nodes: StackRef[] } } | null;
   reviewDecision?: string | null;
   mergeable?: string;
-  reviewThreads?: { nodes: { isResolved: boolean }[] };
+  reviewThreads?: { nodes: { isResolved: boolean; comments?: { nodes: { state?: string }[] } }[] };
   commits?: {
     nodes: {
       commit: {
@@ -148,6 +174,16 @@ function ciState(rollup: string | undefined, checks: CheckDetail[]): CiState {
   return "pending"; // PENDING, EXPECTED
 }
 
+/** Stacked when the base is not the default branch; the parent PR may be gone if its branch was deleted. */
+export function stackOf(raw: Pick<RawPr, "baseRefName" | "repository" | "baseRef">): {
+  onDefaultBranch: boolean;
+  stackedOn: StackRef | null;
+} {
+  // GitHub links the default branch to unrelated PRs, so never treat it as a parent.
+  const onDefaultBranch = !raw.baseRefName || raw.baseRefName === raw.repository.defaultBranchRef?.name;
+  return { onDefaultBranch, stackedOn: onDefaultBranch ? null : (raw.baseRef?.associatedPullRequests.nodes[0] ?? null) };
+}
+
 export function toPr(raw: RawPr): Pr {
   const rollup = raw.commits?.nodes[0]?.commit.statusCheckRollup ?? null;
   const checks = latestChecks(rollup?.contexts.nodes ?? []);
@@ -160,6 +196,9 @@ export function toPr(raw: RawPr): Pr {
     title: raw.title,
     url: raw.url,
     repo: raw.repository.nameWithOwner,
+    author: raw.author?.login ?? "ghost",
+    baseRefName: raw.baseRefName ?? "",
+    ...stackOf(raw),
     isDraft: raw.isDraft,
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
@@ -167,8 +206,9 @@ export function toPr(raw: RawPr): Pr {
     closedAt: raw.closedAt,
     ci: ciState(rollup?.state, checks),
     failingChecks,
+    // Threads still in your unsubmitted review are drafts, not open conversations.
     unresolvedThreads:
-      raw.reviewThreads?.nodes.filter((t) => !t.isResolved).length ?? 0,
+      raw.reviewThreads?.nodes.filter((t) => !t.isResolved && t.comments?.nodes[0]?.state !== "PENDING").length ?? 0,
     reviewDecision: raw.reviewDecision ?? null,
     // UNKNOWN means GitHub has not computed it yet; only CONFLICTING is a conflict.
     conflicts: raw.mergeable === "CONFLICTING",
@@ -182,6 +222,7 @@ export function blockersOf(pr: Pr): string[] {
   if (pr.mergedAt !== null || pr.closedAt !== null) return [];
   const out: string[] = [];
   if (pr.isDraft) out.push("Draft");
+  if (pr.stackedOn) out.push(`Stacked on #${pr.stackedOn.number}`);
   if (pr.conflicts) out.push("Merge conflicts");
   if (pr.ci === "failing") {
     const n = pr.failingChecks.length;
@@ -296,7 +337,15 @@ export interface Comment {
 }
 
 export interface Thread {
+  /** GraphQL node id, used to reply. */
+  id: string;
   path: string;
+  /** Which side of the diff the line number refers to. */
+  side: "LEFT" | "RIGHT";
+  /** First line of a multi-line comment; null for a single line. */
+  startLine: number | null;
+  /** Part of your unsubmitted review: only you can see it. */
+  isPending: boolean;
   line: number | null;
   isResolved: boolean;
   isOutdated: boolean;
@@ -314,6 +363,10 @@ export interface TimelineEntry extends Comment {
 }
 
 export interface PrDetail {
+  /** GraphQL node id, used to comment. */
+  id: string;
+  /** The signed-in GitHub user looking at the PR. */
+  viewer: string;
   number: number;
   title: string;
   url: string;
@@ -324,6 +377,13 @@ export interface PrDetail {
   isDraft: boolean;
   headRefName: string;
   baseRefName: string;
+  onDefaultBranch: boolean;
+  stackedOn: StackRef | null;
+  changedFiles: number;
+  additions: number;
+  deletions: number;
+  /** Your unsubmitted review on this PR, if you started one. */
+  pendingReviewId: string | null;
   reviewDecision: string | null;
   conflicts: boolean;
   /** Description first, then comments and reviews, oldest first. */
@@ -339,14 +399,16 @@ const COMMENT = "author { login avatarUrl(size: 64) } body createdAt url";
 // shortcut: first 100 threads, 50 comments per thread, last 100 comments and
 // 50 reviews; paginate if a PR ever outgrows that.
 export const PR_DETAIL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  viewer { login }
   repository(owner: $owner, name: $name) { pullRequest(number: $number) {
-    number title url isDraft state createdAt body
+    id number title url isDraft state createdAt body changedFiles additions deletions
     author { login avatarUrl(size: 64) } headRefName baseRefName reviewDecision mergeable
-    repository { nameWithOwner }
+    repository { nameWithOwner defaultBranchRef { name } } ${STACK}
     reviewThreads(first: 100) { nodes {
-      isResolved isOutdated path line originalLine resolvedBy { login }
-      comments(first: 50) { nodes { ${COMMENT} diffHunk } }
+      id isResolved isOutdated path line originalLine startLine diffSide resolvedBy { login }
+      comments(first: 50) { nodes { ${COMMENT} diffHunk state } }
     } }
+    pendingReview: reviews(states: PENDING, first: 1) { nodes { id } }
     comments(last: 100) { nodes { ${COMMENT} } }
     reviews(last: 50) { nodes { author { login avatarUrl(size: 64) } state body submittedAt url } }
     commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
@@ -365,8 +427,15 @@ interface RawComment {
   createdAt: string;
   url: string;
   diffHunk?: string;
+  state?: string;
 }
 export interface RawDetail {
+  id?: string;
+  pendingReview?: { nodes: { id: string }[] };
+  changedFiles?: number;
+  additions?: number;
+  deletions?: number;
+  baseRef?: { associatedPullRequests: { nodes: StackRef[] } } | null;
   number: number;
   title: string;
   url: string;
@@ -379,9 +448,12 @@ export interface RawDetail {
   baseRefName: string;
   reviewDecision: string | null;
   mergeable: string;
-  repository: { nameWithOwner: string };
+  repository: { nameWithOwner: string; defaultBranchRef?: { name: string } | null };
   reviewThreads: {
     nodes: {
+      id?: string;
+      diffSide?: string;
+      startLine?: number | null;
       isResolved: boolean;
       isOutdated: boolean;
       path: string;
@@ -416,13 +488,17 @@ const comment = (c: RawComment): Comment => ({
 });
 const CHECK_ORDER: Record<CheckStatus, number> = { failing: 0, pending: 1, passing: 2, skipped: 3 };
 
-export function toDetail(raw: RawDetail): PrDetail {
+export function toDetail(raw: RawDetail, viewer = ""): PrDetail {
   const author = login(raw.author);
   const threads: Thread[] = raw.reviewThreads.nodes.map((t) => {
     const comments = t.comments.nodes.map(comment);
     const hunk = t.comments.nodes[0]?.diffHunk;
     return {
+      id: t.id ?? "",
       path: t.path,
+      side: t.diffSide === "LEFT" ? "LEFT" : "RIGHT",
+      startLine: t.startLine ?? null,
+      isPending: t.comments.nodes[0]?.state === "PENDING",
       line: t.line ?? t.originalLine,
       isResolved: t.isResolved,
       isOutdated: t.isOutdated,
@@ -451,6 +527,8 @@ export function toDetail(raw: RawDetail): PrDetail {
   ].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const contexts = raw.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? [];
   return {
+    id: raw.id ?? "",
+    viewer,
     number: raw.number,
     title: raw.title,
     url: raw.url,
@@ -461,6 +539,11 @@ export function toDetail(raw: RawDetail): PrDetail {
     isDraft: raw.isDraft,
     headRefName: raw.headRefName,
     baseRefName: raw.baseRefName,
+    ...stackOf(raw),
+    changedFiles: raw.changedFiles ?? 0,
+    pendingReviewId: raw.pendingReview?.nodes[0]?.id ?? null,
+    additions: raw.additions ?? 0,
+    deletions: raw.deletions ?? 0,
     reviewDecision: raw.reviewDecision,
     conflicts: raw.mergeable === "CONFLICTING",
     timeline,
@@ -468,4 +551,362 @@ export function toDetail(raw: RawDetail): PrDetail {
     threads: threads.sort((a, b) => Number(a.isResolved) - Number(b.isResolved)),
     checks: latestChecks(contexts).sort((a, b) => CHECK_ORDER[a.status] - CHECK_ORDER[b.status]),
   };
+}
+
+// ---- Watcher: what changed since the last poll ----
+
+/** Realtime channels: new alerts, and alerts marked seen. */
+export const ALERTS_NEW = "pr-alerts";
+export const ALERTS_SEEN = "pr-alerts-seen";
+
+const WHO = "author { __typename login } createdAt url";
+
+// Open PRs only, with the latest few comments from every source so an
+// ignored bot posting last cannot hide a person's comment.
+export const WATCH_QUERY = `query {
+  viewer { login }
+  open: search(query: "${MINE} is:open", type: ISSUE, first: 50) {
+    nodes { ... on PullRequest {
+      id number title url author { login } repository { nameWithOwner }
+      comments(last: 5) { nodes { ${WHO} } }
+      reviews(last: 5) { nodes { author { __typename login } submittedAt url } }
+      reviewThreads(first: 100) { nodes { comments(last: 5) { nodes { ${WHO} } } } }
+      commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes {
+        __typename
+        ... on CheckRun { ${CHECK_RUN} }
+        ... on StatusContext { context state description targetUrl createdAt }
+      } } } } } }
+    } }
+  }
+}`;
+
+interface RawWho {
+  author: { __typename?: string; login: string } | null;
+  createdAt?: string;
+  submittedAt?: string | null;
+  url: string;
+}
+export interface RawWatchPr {
+  id: string;
+  number: number;
+  title: string;
+  url: string;
+  author: { login: string } | null;
+  repository: { nameWithOwner: string };
+  comments: { nodes: RawWho[] };
+  reviews: { nodes: RawWho[] };
+  reviewThreads: { nodes: { comments: { nodes: RawWho[] } }[] };
+  commits: { nodes: { commit: { statusCheckRollup: { contexts: { nodes: RawContext[] } } | null } }[] };
+}
+
+export interface Watched {
+  id: string;
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  /** Latest-run failing jobs as "workflow › job". */
+  failing: string[];
+  /** Newest comment or review by someone other than you, bots and ignored people. */
+  lastComment: { author: string; at: string; url: string } | null;
+}
+
+export function toWatched(raw: RawWatchPr, ignore: Set<string>): Watched {
+  const me = raw.author?.login;
+  const contexts = raw.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? [];
+  const candidates = [
+    ...raw.comments.nodes,
+    ...raw.reviews.nodes,
+    ...raw.reviewThreads.nodes.flatMap((t) => t.comments.nodes),
+  ].flatMap((w) => {
+    const at = w.createdAt ?? w.submittedAt;
+    const who = w.author;
+    if (!who || !at || who.login === me || who.__typename === "Bot" || ignore.has(who.login.toLowerCase())) return [];
+    return [{ author: who.login, at, url: w.url }];
+  });
+  return {
+    id: raw.id,
+    repo: raw.repository.nameWithOwner,
+    number: raw.number,
+    title: raw.title,
+    url: raw.url,
+    failing: latestChecks(contexts)
+      .filter((c) => c.status === "failing")
+      .map((c) => (c.workflow ? `${c.workflow} › ${c.name}` : c.name)),
+    lastComment: candidates.reduce<Watched["lastComment"]>((a, b) => (a && a.at >= b.at ? a : b), null),
+  };
+}
+
+export interface WatchState {
+  failing: string[];
+  lastCommentAt: string | null;
+}
+
+export interface Alert {
+  id: string;
+  kind: "ci" | "comment" | "test";
+  repo: string;
+  number: number;
+  url: string;
+  headline: string;
+  detail: string;
+  at: string;
+  seen: boolean;
+}
+
+/**
+ * Alerts for what changed since `prev`. A null `prev` (first poll, or a new
+ * GitHub account) only records a baseline, so installing never floods you.
+ */
+export function diffWatch(
+  prev: Record<string, WatchState> | null,
+  prs: Watched[],
+  now: string,
+  notify: { ci: boolean; comments: boolean },
+): { alerts: Alert[]; next: Record<string, WatchState> } {
+  const next: Record<string, WatchState> = {};
+  const alerts: Alert[] = [];
+  for (const pr of prs) {
+    next[pr.id] = { failing: pr.failing, lastCommentAt: pr.lastComment?.at ?? null };
+    if (prev === null) continue;
+    // A PR first seen now: its CI counts from clean, its old comments do not.
+    const was = prev[pr.id] ?? { failing: [], lastCommentAt: pr.lastComment?.at ?? null };
+    const ref = { repo: pr.repo, number: pr.number, seen: false };
+    const newlyFailing = pr.failing.filter((f) => !was.failing.includes(f));
+    if (notify.ci && newlyFailing.length > 0) {
+      alerts.push({
+        ...ref,
+        id: `${pr.id}:ci:${newlyFailing.join("|")}:${now}`,
+        kind: "ci",
+        url: pr.url,
+        headline: `CI failing · ${pr.repo}#${pr.number}`,
+        detail: `${newlyFailing.join(", ")} — ${pr.title}`,
+        at: now,
+      });
+    }
+    const c = pr.lastComment;
+    if (notify.comments && c && (was.lastCommentAt === null || c.at > was.lastCommentAt)) {
+      alerts.push({
+        ...ref,
+        id: `${pr.id}:comment:${c.at}`,
+        kind: "comment",
+        url: c.url,
+        headline: `${c.author} commented · ${pr.repo}#${pr.number}`,
+        detail: pr.title,
+        at: c.at,
+      });
+    }
+  }
+  return { alerts, next };
+}
+
+/** Who a thread is waiting on, from the point of view of whoever is looking. */
+export type ThreadStatus = "resolved" | "waiting-on-you" | "you-replied" | "waiting-on-author" | "author-replied";
+
+export function threadStatus(t: Thread, viewer: string, author: string): ThreadStatus {
+  if (t.isResolved) return "resolved";
+  // awaitingReply: the last word is not the PR author's.
+  if (viewer === author) return t.awaitingReply ? "waiting-on-you" : "you-replied";
+  return t.awaitingReply ? "waiting-on-author" : "author-replied";
+}
+
+// ---- Changed files (REST /pulls/{n}/files) ----
+
+export interface RestFile {
+  filename: string;
+  previous_filename?: string;
+  status: string;
+  additions: number;
+  deletions: number;
+  patch?: string;
+}
+
+export interface PrFile {
+  path: string;
+  previousPath: string | null;
+  /** added, removed, modified, renamed, copied, changed, unchanged */
+  status: string;
+  additions: number;
+  deletions: number;
+  /** Null for binary files, files GitHub will not diff, or very large patches. */
+  patch: string | null;
+}
+
+const MAX_PATCH = 200_000;
+
+export function toFiles(files: RestFile[]): PrFile[] {
+  return files.map((f) => ({
+    path: f.filename,
+    previousPath: f.previous_filename ?? null,
+    status: f.status,
+    additions: f.additions,
+    deletions: f.deletions,
+    patch: f.patch && f.patch.length <= MAX_PATCH ? f.patch : null,
+  }));
+}
+
+// ---- Writes: only ever sent from an explicit Reply or Comment click ----
+
+export const REPLY_MUTATION = `mutation($threadId: ID!, $body: String!) {
+  addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
+    comment { url state }
+  }
+}`;
+
+export const COMMENT_MUTATION = `mutation($subjectId: ID!, $body: String!) {
+  addComment(input: { subjectId: $subjectId, body: $body }) { commentEdge { node { url } } }
+}`;
+
+// ---- Reviewing: line comments and submitting a review ----
+
+export interface DiffLine {
+  kind: "hunk" | "add" | "del" | "ctx";
+  text: string;
+  oldLine: number | null;
+  newLine: number | null;
+}
+
+/** GitHub's per-file REST patch, as rows with the line numbers a comment needs. */
+export function parsePatch(patch: string): DiffLine[] {
+  const out: DiffLine[] = [];
+  let oldLine = 0;
+  let newLine = 0;
+  const rows = patch.split("\n");
+  if (rows.at(-1) === "") rows.pop(); // a trailing newline is not a context line
+  for (const row of rows) {
+    const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(row);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
+      out.push({ kind: "hunk", text: row, oldLine: null, newLine: null });
+    } else if (row.startsWith("\\")) {
+      continue; // "\ No newline at end of file" belongs to neither side
+    } else if (row.startsWith("+")) {
+      out.push({ kind: "add", text: row.slice(1), oldLine: null, newLine: newLine++ });
+    } else if (row.startsWith("-")) {
+      out.push({ kind: "del", text: row.slice(1), oldLine: oldLine++, newLine: null });
+    } else {
+      out.push({ kind: "ctx", text: row.slice(1), oldLine: oldLine++, newLine: newLine++ });
+    }
+  }
+  return out;
+}
+
+/** Where GitHub anchors a comment on this row: removed lines on the old side, the rest on the new. */
+export function commentTarget(row: DiffLine): { side: "LEFT" | "RIGHT"; line: number } | null {
+  if (row.kind === "hunk") return null;
+  return row.kind === "del" ? { side: "LEFT", line: row.oldLine! } : { side: "RIGHT", line: row.newLine! };
+}
+
+export interface CommentRange {
+  side: "LEFT" | "RIGHT";
+  line: number;
+  /** Set only when the comment spans more than one line. */
+  start: { side: "LEFT" | "RIGHT"; line: number } | null;
+}
+
+/**
+ * The comment for rows `a`..`b` (either order), anchored on the lower row like
+ * GitHub. Null when a hunk header sits between them: GitHub only accepts a
+ * range inside one hunk.
+ */
+export function commentRange(rows: DiffLine[], a: number, b: number): CommentRange | null {
+  const [from, to] = a <= b ? [a, b] : [b, a];
+  const end = rows[to] ? commentTarget(rows[to]!) : null;
+  const begin = rows[from] ? commentTarget(rows[from]!) : null;
+  if (!end || !begin) return null;
+  if (rows.slice(from, to + 1).some((r) => r.kind === "hunk")) return null;
+  return { ...end, start: from === to ? null : begin };
+}
+
+export type ReviewEvent = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
+
+/** GitHub refuses Approve and Request changes on your own pull request. */
+export function reviewEvents(viewer: string, author: string): ReviewEvent[] {
+  return viewer === author ? ["COMMENT"] : ["COMMENT", "APPROVE", "REQUEST_CHANGES"];
+}
+
+/** Mirrors GitHub: changes need a reason, a comment review needs a body or line comments. */
+export function canSubmitReview(event: ReviewEvent, body: string, pendingComments: number): boolean {
+  if (event === "APPROVE") return true;
+  if (event === "REQUEST_CHANGES") return body.trim() !== "";
+  return body.trim() !== "" || pendingComments > 0;
+}
+
+// A range adds startLine/startSide; they are left out entirely for one line.
+const thread = (range: boolean) =>
+  "path: $path, line: $line, side: $side, body: $body" + (range ? ", startLine: $startLine, startSide: $startSide" : "");
+const threadVars = (range: boolean) =>
+  "$path: String!, $line: Int!, $side: DiffSide!, $body: String!" + (range ? ", $startLine: Int!, $startSide: DiffSide!" : "");
+
+/** A new pending review holding its first line comment (or, with $event, posted at once). */
+export const reviewStartMutation = (range: boolean) => `mutation($prId: ID!, ${threadVars(range)}, $event: PullRequestReviewEvent) {
+  addPullRequestReview(input: { pullRequestId: $prId, event: $event, threads: [{ ${thread(range)} }] }) {
+    pullRequestReview { id state }
+  }
+}`;
+
+export const reviewAddThreadMutation = (range: boolean) => `mutation($reviewId: ID!, ${threadVars(range)}) {
+  addPullRequestReviewThread(input: { pullRequestReviewId: $reviewId, ${thread(range)} }) { thread { id } }
+}`;
+
+export const REVIEW_DISCARD_MUTATION = `mutation($reviewId: ID!) {
+  deletePullRequestReview(input: { pullRequestReviewId: $reviewId }) { pullRequestReview { id } }
+}`;
+
+export const REVIEW_SUBMIT_PENDING_MUTATION = `mutation($reviewId: ID!, $event: PullRequestReviewEvent!, $body: String) {
+  submitPullRequestReview(input: { pullRequestReviewId: $reviewId, event: $event, body: $body }) {
+    pullRequestReview { url state }
+  }
+}`;
+
+export const REVIEW_SUBMIT_NEW_MUTATION = `mutation($prId: ID!, $event: PullRequestReviewEvent!, $body: String) {
+  addPullRequestReview(input: { pullRequestId: $prId, event: $event, body: $body }) {
+    pullRequestReview { url state }
+  }
+}`;
+
+export const CLOSE_PR_MUTATION = `mutation($prId: ID!) {
+  closePullRequest(input: { pullRequestId: $prId }) { pullRequest { state } }
+}`;
+
+export const REOPEN_PR_MUTATION = `mutation($prId: ID!) {
+  reopenPullRequest(input: { pullRequestId: $prId }) { pullRequest { state } }
+}`;
+
+
+// ---- Mapping the diff viewer's line selection to a GitHub comment ----
+
+/** @pierre/diffs names the old side "deletions" and the new side "additions". */
+export type ViewerSide = "deletions" | "additions";
+export const toViewerSide = (side: "LEFT" | "RIGHT"): ViewerSide => (side === "LEFT" ? "deletions" : "additions");
+
+/**
+ * The comment range for a selection in the diff viewer, or null when a line is
+ * not in the patch or the selection crosses a hunk (GitHub would refuse it).
+ */
+export function rangeFromSelection(
+  rows: DiffLine[],
+  selection: { start: number; side?: ViewerSide; end: number; endSide?: ViewerSide },
+): CommentRange | null {
+  const rowOf = (side: ViewerSide, line: number) =>
+    rows.findIndex((r) => (side === "deletions" ? r.kind !== "add" && r.oldLine === line : r.kind !== "del" && r.newLine === line));
+  const side = selection.side ?? "additions";
+  const a = rowOf(side, selection.start);
+  const b = rowOf(selection.endSide ?? side, selection.end);
+  return a < 0 || b < 0 ? null : commentRange(rows, a, b);
+}
+
+/**
+ * GitHub's REST patch is only the hunks; the diff viewer needs one complete
+ * file patch, so add the git headers it expects.
+ */
+export function fullPatch(file: Pick<PrFile, "path" | "previousPath" | "status" | "patch">): string {
+  const before = file.previousPath ?? file.path;
+  return [
+    `diff --git a/${before} b/${file.path}`,
+    file.status === "added" ? "--- /dev/null" : `--- a/${before}`,
+    file.status === "removed" ? "+++ /dev/null" : `+++ b/${file.path}`,
+    file.patch ?? "",
+  ].join("\n");
 }

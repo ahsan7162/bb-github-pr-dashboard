@@ -1,9 +1,10 @@
 // bb-github-pr-dashboard — frontend entry: the "My PRs" page in the nav rail.
 import { useCallback, useEffect, useState } from "react";
-import { UrlLink, definePluginApp, useBbNavigate, useRpc } from "@get-bb/plugin-sdk/app";
+import { UrlLink, definePluginApp, experimental_usePluginId, useBbNavigate, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./server";
 import type { Pr, PrList } from "./prs";
 import { PrDetailView } from "./detail";
+import { AlertListener, AlertsStrip, NotificationSettings, useAlertBadge } from "./alerts";
 import {
   EmptyState,
   Pill,
@@ -19,8 +20,15 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
-type Tab = "open" | "merged" | "closed";
+type Tab = "open" | "review" | "assigned" | "merged" | "closed";
 type Lists = Record<Tab, PrList> & { fetchedAt: string };
+const EMPTY: Record<Tab, string> = {
+  open: "You have no open pull requests.",
+  review: "No reviews are waiting on you or your teams.",
+  assigned: "No open pull requests are assigned to you.",
+  merged: "No merged pull requests yet.",
+  closed: "No closed pull requests.",
+};
 
 // Survives remounts (bb remounts the page on resize or when you come back to
 // it), so the last result shows at once while a refresh runs.
@@ -57,7 +65,7 @@ const CI: Record<Pr["ci"], { icon: string; tone: Tone; label: string } | null> =
   none: null,
 };
 
-function PrRow({ pr, onOpen }: { pr: Pr; onOpen: () => void }) {
+function PrRow({ pr, onOpen, showAuthor }: { pr: Pr; onOpen: () => void; showAuthor: boolean }) {
   const state = prState(pr);
   const isOpen = state.label === "Open" || state.label === "Draft";
   const ci = isOpen ? CI[pr.ci] : null;
@@ -83,6 +91,12 @@ function PrRow({ pr, onOpen }: { pr: Pr; onOpen: () => void }) {
           <span className="line-clamp-2 text-sm font-medium leading-snug group-hover:underline">{pr.title}</span>
           <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
             <span className="tabular-nums">#{pr.number}</span>
+            {showAuthor ? (
+              <>
+                <span aria-hidden>·</span>
+                <span>by {pr.author}</span>
+              </>
+            ) : null}
             <span aria-hidden>·</span>
             <span>{when}</span>
             {ci ? (
@@ -205,6 +219,7 @@ function ListView({
   onOpen: (pr: Pr) => void;
 }) {
   const list = data?.[tab];
+  const pluginId = experimental_usePluginId();
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
@@ -214,6 +229,14 @@ function ListView({
           onChange={setTab}
           options={[
             { id: "open", label: "Open", icon: "GitPullRequest", count: data?.open.total },
+            {
+              id: "review",
+              label: "Review requested",
+              icon: "Eye",
+              count: data?.review.total,
+              countTone: data && data.review.total > 0 ? "warn" : "neutral",
+            },
+            { id: "assigned", label: "Assigned", icon: "UserRound", count: data?.assigned.total },
             { id: "merged", label: "Merged", icon: "GitMerge", count: data?.merged.total },
             { id: "closed", label: "Closed", icon: "GitPullRequestClosed", count: data?.closed.total },
           ]}
@@ -222,6 +245,14 @@ function ListView({
           {data ? (
             <span className="hidden text-xs text-muted-foreground sm:inline">Updated {ago(data.fetchedAt)}</span>
           ) : null}
+          <UrlLink
+            href={`/settings/plugins/${pluginId}`}
+            aria-label="Notification settings"
+            title="Notification settings"
+            className="inline-flex size-9 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <Icon name="BellDot" className="size-4" />
+          </UrlLink>
           <Button variant="ghost" size="icon" aria-label="Refresh" disabled={loading} onClick={refetch}>
             <Icon name="RotateCcw" className={cn("size-4", loading && "animate-spin")} />
           </Button>
@@ -232,20 +263,26 @@ function ListView({
           {error}
         </div>
       ) : null}
+      <AlertsStrip />
       {list === undefined ? (
         error ? null : <Skeleton rows={4} />
       ) : (
         <>
           {tab === "open" && list.items.length > 0 ? <OpenStats items={list.items} /> : null}
           {list.items.length === 0 ? (
-            <EmptyState icon="GitPullRequest">No {tab} pull requests.</EmptyState>
+            <EmptyState icon="GitPullRequest">{EMPTY[tab]}</EmptyState>
           ) : (
             groupByRepo(list.items).map(([repo, prs]) => (
               <section key={repo} className="space-y-1.5">
                 <RepoHeader repo={repo} count={prs.length} />
                 <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
                   {prs.map((pr) => (
-                    <PrRow key={pr.id} pr={pr} onOpen={() => onOpen(pr)} />
+                    <PrRow
+                      key={pr.id}
+                      pr={pr}
+                      onOpen={() => onOpen(pr)}
+                      showAuthor={tab === "review" || tab === "assigned"}
+                    />
                   ))}
                 </ul>
               </section>
@@ -283,7 +320,15 @@ function PrsPage({ subPath }: { subPath: string }) {
   };
   const nav = useBbNavigate();
   const route = parseRoute(subPath);
-  const all = prs.data ? [...prs.data.open.items, ...prs.data.merged.items, ...prs.data.closed.items] : [];
+  // A PR can be in two lists (e.g. review requested and assigned); keep one copy.
+  const all = [
+    ...new Map(
+      (prs.data ? (["open", "review", "assigned", "merged", "closed"] as const).flatMap((t) => prs.data![t].items) : []).map(
+        (p) => [p.id, p],
+      ),
+    ).values(),
+  ];
+  const openPr = (repo: string, number: number) => nav.toPluginPanel("prs", { subPath: `${repo}/${number}` });
   return (
     // Keyed by route so opening a PR starts at the top.
     <div key={route ? subPath : "list"} className="h-full min-h-0 flex-1 overflow-y-auto">
@@ -293,6 +338,10 @@ function PrsPage({ subPath }: { subPath: string }) {
             repo={route.repo}
             number={route.number}
             summary={all.find((p) => p.repo === route.repo && p.number === route.number)}
+            // Only from the lists already loaded; GitHub has no cheap "PRs based on this branch" field here.
+            stackedAbove={all.filter((p) => p.repo === route.repo && p.stackedOn?.number === route.number && !p.mergedAt && !p.closedAt)}
+            onOpenPr={openPr}
+            onStateChanged={prs.refetch}
             onBack={() => nav.toPluginPanel("prs")}
           />
         ) : (
@@ -300,7 +349,7 @@ function PrsPage({ subPath }: { subPath: string }) {
             prs={prs}
             tab={tab}
             setTab={setTab}
-            onOpen={(pr) => nav.toPluginPanel("prs", { subPath: `${pr.repo}/${pr.number}` })}
+            onOpen={(pr) => openPr(pr.repo, pr.number)}
           />
         )}
       </div>
@@ -315,5 +364,13 @@ export default definePluginApp((app) => {
     icon: "GitPullRequest",
     path: "prs",
     component: PrsPage,
+    experimental_useBadge: useAlertBadge,
+  });
+  app.slots.experimental_appOverlay({ id: "pr-alerts", component: AlertListener });
+  app.slots.settingsSection({
+    id: "notifications",
+    title: "Notifications",
+    description: "Get told when CI starts failing or someone comments on one of your open PRs.",
+    component: NotificationSettings,
   });
 });

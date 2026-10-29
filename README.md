@@ -6,13 +6,27 @@ not merged yet (draft, conflicts, failing CI with the failing pipeline and
 job, CI running, changes requested, unresolved review comments, awaiting
 review). Click a PR for its detail view: CI checks with annotations and log
 links, review threads (unresolved first, with replies and who has the last
-word), and the conversation.
+word), and the conversation. Review requested (you or your teams) and
+Assigned tabs cover other people's PRs. The detail view also shows changed
+files (bb's diff viewer, inline or side by side, with syntax highlighting;
+published comments under their lines; press + or select line numbers, Shift-click
+or drag for a range, to comment; start a review, then submit it as Comment,
+Approve or Request changes, or discard it), where the PR sits in a stack, and lets you reply
+to threads, comment, or close and reopen the PR.
+A background watcher alerts you (toast, rail badge, desktop notification) when
+CI starts failing or someone comments.
 
-- `server.ts` — the `prs_list` and `pr_detail` RPCs. Gets a token from the
+- `server.ts` — the `prs_list`, `pr_detail` and `pr_files` RPCs; the writes
+  `pr_reply`, `pr_comment`, `pr_line_comment`, `pr_submit_review`,
+  `pr_discard_review` and `pr_set_state`, each sent only on an explicit click; the `watch` background
+  service; and the `alerts_*` RPCs. Gets a token from the
   `token` setting, else from `gh auth token`, and sends GraphQL to GitHub.
 - `prs.ts` — the GraphQL queries and the pure mapping to rows, blockers,
   checks, threads and the timeline.
-- `prs.test.ts` — tests for that mapping (`npm test`).
+- `prs.test.ts` — tests for that mapping and the alert diff (`npm test`).
+- `alerts.tsx` — the alert listener (toasts, desktop notifications), the My PRs
+  badge, the "New since you last looked" strip, and the Notifications section
+  on the plugin settings page.
 - `app.tsx` — the page (`app.slots.navPanel`); `/plugins/bb-github-pr-dashboard/prs/<owner>/<repo>/<number>`
   opens a PR's detail view (`detail.tsx`). `parts.tsx` holds shared bits.
 - `PLUGIN_OVERVIEW.md` — the store listing text; keep it in step with
@@ -29,8 +43,27 @@ Each user's own GitHub connection is used:
 bb plugin config bb-github-pr-dashboard set token <token>   # optional
 ```
 
-A classic token needs `repo`; a fine-grained one needs Pull requests and
+A classic token needs `repo`; a fine-grained one needs Pull requests read
+and write (write only for comments, replies, reviews, close and reopen) and
 Checks read. Authorize it for SAML SSO orgs, or their PRs are left out.
+
+## Alerts
+
+The `watch` service polls your open PRs every `checkEveryMinutes` (default 5)
+and stores an alert when a job's latest run starts failing or someone else
+comments or reviews. The first poll for an account only records a baseline. The bell button on
+My PRs opens these settings.
+
+```
+bb plugin config bb-github-pr-dashboard set notifyCi false
+bb plugin config bb-github-pr-dashboard set notifyComments false
+bb plugin config bb-github-pr-dashboard set showToasts false    # no bb toasts
+bb plugin config bb-github-pr-dashboard set showDesktop false   # no desktop banners
+bb plugin config bb-github-pr-dashboard set showBadge false     # no count on My PRs
+bb plugin config bb-github-pr-dashboard set ignoreAuthors "some-review-bot, ci-helper"
+bb plugin config bb-github-pr-dashboard set checkEveryMinutes 10
+bb plugin rpc call bb-github-pr-dashboard alerts_test   # send a test alert
+```
 
 ## Develop
 
@@ -49,7 +82,7 @@ bb plugin rpc call bb-github-pr-dashboard pr_detail --input-file in.json
 Install from Git (bb builds it on install):
 
 ```
-bb plugin install git:https://github.com/ahsan7162/bb-github-pr-dashboard.git@^0.1.0
+bb plugin install git:https://github.com/ahsan7162/bb-github-pr-dashboard.git@^0.2.0
 ```
 
 To release: bump `version` in `package.json`, run `npm test` and

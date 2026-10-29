@@ -23,6 +23,7 @@
   "include": [
     "server.ts",
     "prs.ts",
+    "alerts.tsx",
     "detail.tsx",
     "parts.tsx",
     "app.tsx",

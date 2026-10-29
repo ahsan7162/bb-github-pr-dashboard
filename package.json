@@ -1,6 +1,6 @@
 {
   "name": "bb-github-pr-dashboard",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "engines": {
     "bb": ">=0.48",
@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "GitHub PR Dashboard",
-    "description": "See your open, merged and closed GitHub PRs in one tab, with why each open PR is stuck: failing CI, unresolved comments, reviews, conflicts.",
+    "description": "Track your GitHub PRs and review requests in one tab: why each is stuck, changed files, replies, and alerts.",
     "branding": {
       "icon": "GitPullRequest"
     },
@@ -46,7 +46,7 @@
     "typescript": "^5.7.0",
     "vaul": "^1.1.2"
   },
-  "description": "See your open, merged and closed GitHub PRs in one tab, with why each open PR is stuck: failing CI, unresolved comments, reviews, conflicts.",
+  "description": "Track your GitHub PRs and review requests in one tab: why each is stuck, changed files, replies, and alerts.",
   "scripts": {
     "test": "node --test prs.test.ts",
     "typecheck": "tsc"
