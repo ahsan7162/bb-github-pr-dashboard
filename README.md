@@ -1,5 +1,15 @@
 # bb-github-pr-dashboard
 
+<!-- The tour video is a GitHub attachment (dragged into this file in the web editor), so it never enters git: bb clones this repo on every install. -->
+
+A 60-second tour: the dashboard and its filters, CI failures down to the test,
+alerts, comment threads, syntax-highlighted diffs and code review, all inside bb.
+
+<sub>Sample data only. Music: "Happy Beats & Business Moves Vol. 1" by Sascha Ende,
+[ende.app](https://ende.app/en/song/12866-happy-beats-business-moves-vol-1),
+[CC BY 4.0](https://ende.app/en/standard-license). Sound effects:
+[Kenney](https://kenney.nl), CC0.</sub>
+
 A **My PRs** page in the bb navigation rail: your open, merged and closed
 GitHub pull requests grouped by repository, and for each open one why it is
 not merged yet (draft, conflicts, failing CI with the failing pipeline and
@@ -88,3 +98,9 @@ bb plugin install git:https://github.com/ahsan7162/bb-github-pr-dashboard.git@^0
 To release: bump `version` in `package.json`, run `npm test` and
 `bb plugin build`, commit, then tag `vX.Y.Z` and push the tag. Never move a
 published tag; bb refuses a tag that points at a different commit.
+
+Keep media out of git: bb runs a full `git clone` of this repository on every
+install, so every branch and tag ships. Add README media by dragging it into
+the README in GitHub's web editor, which stores it as an attachment outside
+git. `npm test` fails if a media file or anything over 1 MB is reachable from
+any branch or tag.

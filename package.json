@@ -48,7 +48,7 @@
   },
   "description": "Track your GitHub PRs and review requests in one tab: why each is stuck, changed files, replies, and alerts.",
   "scripts": {
-    "test": "node --test prs.test.ts",
+    "test": "node --test prs.test.ts repo.test.ts",
     "typecheck": "tsc"
   },
   "keywords": [
