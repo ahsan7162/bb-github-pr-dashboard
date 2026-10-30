@@ -1,7 +1,7 @@
 // bb-github-pr-dashboard — backend entry.
 //
-// `prs_list` runs one GitHub GraphQL query for the user's open,
-// merged and closed PRs; `pr_detail` fetches one PR's threads, conversation and
+// `prs_list` runs one GitHub GraphQL query for one tab's PRs (open, review
+// requested, assigned, merged or closed) and every tab's count; `pr_detail` fetches one PR's threads, conversation and
 // checks. A background service polls open PRs and stores an alert when CI
 // starts failing or someone comments; the page shows them as toasts, desktop
 // notifications and a badge. Auth comes from the optional `token` setting, else
@@ -15,21 +15,9 @@ import {
 } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
-  CLOSE_PR_MUTATION,
-  COMMENT_MUTATION,
-  REOPEN_PR_MUTATION,
-  REVIEW_DISCARD_MUTATION,
-  reviewAddThreadMutation,
-  reviewStartMutation,
-  REVIEW_SUBMIT_NEW_MUTATION,
-  REVIEW_SUBMIT_PENDING_MUTATION,
   canSubmitReview,
-  PRS_QUERY,
-  PR_DETAIL_QUERY,
-  REPLY_MUTATION,
   ALERTS_NEW,
   ALERTS_SEEN,
-  WATCH_QUERY,
   diffWatch,
   toDetail,
   toFiles,
@@ -42,6 +30,23 @@ import {
   type RawWatchPr,
   type WatchState,
 } from "./prs";
+import {
+  CLOSE_PR_MUTATION,
+  COMMENT_MUTATION,
+  REOPEN_PR_MUTATION,
+  REVIEW_DISCARD_MUTATION,
+  reviewAddThreadMutation,
+  reviewStartMutation,
+  REVIEW_SUBMIT_NEW_MUTATION,
+  REVIEW_SUBMIT_PENDING_MUTATION,
+  HISTORY_QUERY,
+  LIST_TABS,
+  listQuery,
+  historyQuery,
+  PR_DETAIL_QUERY,
+  REPLY_MUTATION,
+  WATCH_QUERY,
+} from "./queries";
 
 const stackSchema = z.object({ number: z.number(), title: z.string(), url: z.string() }).nullable();
 const prSchema = z.object({
@@ -161,15 +166,16 @@ const commentBody = z.string().trim().min(1, "Write something first").max(65_000
 
 export const rpcContract = defineRpcContract({
   prs_list: {
-    input: z.null(),
+    input: z.object({ tab: z.enum(["open", "review", "assigned", "merged", "closed"]) }).strict(),
     output: z.object({
-      open: listSchema,
-      review: listSchema,
-      assigned: listSchema,
-      merged: listSchema,
-      closed: listSchema,
+      list: listSchema,
+      counts: z.object({ open: z.number(), review: z.number(), assigned: z.number(), merged: z.number(), closed: z.number() }),
       fetchedAt: z.string(),
     }),
+  },
+  prs_history: {
+    input: z.object({ state: z.enum(["merged", "closed"]) }).strict(),
+    output: listSchema,
   },
   pr_detail: { input: prRef, output: detailSchema },
   pr_files: {
@@ -429,16 +435,29 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   bb.rpc.register(rpcContract, {
-    prs_list: async () => {
-      const data = await graphql<Record<"open" | "review" | "assigned" | "merged" | "closed", RawSearch>>(PRS_QUERY);
+    prs_list: async ({ tab }) => {
+      const data = await graphql<Record<(typeof LIST_TABS)[number], RawSearch>>(listQuery(tab));
+      const count = (t: (typeof LIST_TABS)[number]) => data[t].issueCount;
       return {
-        open: toList(data.open),
-        review: toList(data.review),
-        assigned: toList(data.assigned),
-        merged: toList(data.merged),
-        closed: toList(data.closed),
+        list: toList(data[tab]),
+        counts: { open: count("open"), review: count("review"), assigned: count("assigned"), merged: count("merged"), closed: count("closed") },
         fetchedAt: new Date().toISOString(),
       };
+    },
+    prs_history: async ({ state }) => {
+      const items: ReturnType<typeof toList>["items"] = [];
+      let total = 0;
+      let after: string | null = null;
+      // GitHub search stops at 1,000 results (10 pages of 100); older history is left out.
+      for (let page = 0; page < 10; page++) {
+        const data: { search: RawSearch } = await graphql<{ search: RawSearch }>(HISTORY_QUERY, { q: historyQuery(state), after });
+        const list = toList(data.search);
+        total = list.total;
+        items.push(...list.items);
+        after = data.search.pageInfo?.hasNextPage ? data.search.pageInfo.endCursor : null;
+        if (!after) break;
+      }
+      return { total, items };
     },
     pr_detail: async ({ repo, number }) => {
       const [owner, name] = repo.split("/");

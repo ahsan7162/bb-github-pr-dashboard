@@ -1,5 +1,5 @@
 // Presentational pieces shared by the list (app.tsx) and detail.tsx.
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
@@ -19,16 +19,74 @@ export const TONE_TEXT: Record<Tone, string> = {
   bad: "text-destructive",
   warn: "text-warning-text",
   good: "text-success",
-  merged: "text-violet-500",
+  merged: "text-[var(--prd-merged)]",
   neutral: "text-muted-foreground",
 };
 const TONE_FILL: Record<Tone, string> = {
   bad: "bg-destructive/10 text-destructive",
   warn: "bg-warning/15 text-warning-text",
   good: "bg-success/10 text-success",
-  merged: "bg-violet-500/10 text-violet-500",
+  merged: "bg-[var(--prd-merged)]/10 text-[var(--prd-merged)]",
   neutral: "bg-muted text-muted-foreground",
 };
+
+const TONE_SPINE: Record<Tone, string> = {
+  bad: "bg-destructive",
+  warn: "bg-warning",
+  good: "bg-success",
+  merged: "bg-[var(--prd-merged)]",
+  neutral: "bg-muted-foreground/40",
+};
+
+/**
+ * The status spine on a PR or thread's left edge (MASTER.md). Drawn 5px wide at 3/5 scale so it
+ * widens with a transform, never a width change: on hover of the nearest `group`, or while `wide`.
+ * The parent needs `relative`.
+ */
+export function Spine({ tone, wide = false }: { tone: Tone; wide?: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "pointer-events-none absolute inset-y-3 left-0 w-[var(--prd-spine-wide)] origin-left rounded-full transition-transform group-hover:scale-x-100",
+        wide
+          ? "scale-x-100 duration-[var(--prd-expand)] ease-[var(--prd-spring)]"
+          : "scale-x-[0.6] duration-[var(--prd-hover)] ease-[var(--prd-ease-out)]", // 0.6 = --prd-spine / --prd-spine-wide (3px of 5px)
+        TONE_SPINE[tone],
+      )}
+    />
+  );
+}
+
+/** A motion token in ms, read from tokens.css (0 under reduced motion). */
+export function motionMs(token: "--prd-hover" | "--prd-arrive" | "--prd-expand"): number {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? (v.endsWith("ms") ? n : n * 1000) : 0;
+}
+
+export const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/** Plays the "arrive" motion (fade and rise 4px) whenever `key` changes; `--prd-expand` for a file opening. */
+export function useArrive<T extends HTMLElement>(key: unknown, token: "--prd-arrive" | "--prd-expand" = "--prd-arrive") {
+  const ref = useRef<T>(null);
+  useLayoutEffect(() => {
+    const ms = motionMs(token);
+    if (!ref.current || ms === 0) return;
+    const ease = getComputedStyle(document.documentElement).getPropertyValue("--prd-spring").trim() || "ease-out";
+    ref.current.animate([{ opacity: 0, transform: "translateY(4px)" }, { opacity: 1, transform: "none" }], { duration: ms, easing: ease });
+  }, [key, token]);
+  return ref;
+}
+
+/** A key hint, e.g. j or /. */
+export function Kbd({ children }: { children: ReactNode }) {
+  return (
+    <kbd className="inline-grid min-w-5 place-items-center rounded-[var(--prd-radius-control)] border border-border px-1 text-xs text-muted-foreground">
+      {children}
+    </kbd>
+  );
+}
 
 export function Pill({ tone, icon, children }: { tone: Tone; icon?: string; children: ReactNode }) {
   return (
@@ -107,7 +165,7 @@ export function Segmented<T extends string>({
   label: string;
 }) {
   return (
-    <div role="tablist" aria-label={label} className="inline-flex max-w-full gap-0.5 overflow-x-auto rounded-lg bg-muted p-0.5">
+    <div role="tablist" aria-label={label} className="inline-flex max-w-full gap-0.5 overflow-x-auto rounded-[var(--prd-radius-control)] bg-muted p-0.5">
       {options.map((o) => (
         <button
           key={o.id}
@@ -115,7 +173,7 @@ export function Segmented<T extends string>({
           aria-selected={value === o.id}
           onClick={() => onChange(o.id)}
           className={cn(
-            "inline-flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+            "inline-flex shrink-0 items-center gap-1.5 rounded-[calc(var(--prd-radius-control)-2px)] px-2.5 py-1 text-sm outline-none transition-colors duration-[var(--prd-hover)] ease-[var(--prd-ease-out)] focus-visible:ring-2 focus-visible:ring-ring",
             value === o.id
               ? "bg-background font-medium text-foreground shadow-sm"
               : "text-muted-foreground hover:text-foreground",
@@ -144,7 +202,7 @@ export function EmptyState({ icon, children }: { icon?: string; children: ReactN
   return (
     <div
       role="status"
-      className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground"
+      className="flex flex-col items-center gap-2 rounded-[var(--prd-radius-panel)] border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground"
     >
       {icon ? <Icon name={icon} className="size-5 opacity-60" aria-hidden /> : null}
       {children}
@@ -157,7 +215,7 @@ export function Skeleton({ rows = 3 }: { rows?: number }) {
   return (
     <div aria-busy className="space-y-2" role="status" aria-label="Loading">
       {Array.from({ length: rows }, (_, i) => (
-        <div key={i} className="h-16 animate-pulse rounded-xl bg-muted/60" />
+        <div key={i} className="h-16 animate-pulse rounded-[var(--prd-radius-panel)] bg-muted/60" />
       ))}
     </div>
   );

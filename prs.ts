@@ -1,5 +1,6 @@
-// GitHub GraphQL query and the pure mapping from its response to the rows the
-// page shows. No I/O here, so prs.test.ts can exercise it directly.
+// The shapes GitHub returns and the pure mapping from them to what the page shows
+// (the GraphQL text itself is in queries.ts). No I/O here, so prs.test.ts can
+// exercise it directly.
 
 export type CiState = "passing" | "failing" | "pending" | "none";
 
@@ -47,51 +48,6 @@ export interface PrList {
   items: Pr[];
 }
 
-const CHECK_RUN = `name status conclusion detailsUrl startedAt
-  checkSuite { app { name } workflowRun { workflow { name } } }`;
-
-const BASE = `
-  id number title url isDraft createdAt updatedAt mergedAt closedAt
-  author { login } baseRefName
-  repository { nameWithOwner defaultBranchRef { name } }`;
-
-// The PR whose head branch is this PR's base: the PR below it in a stack.
-const STACK = "baseRef { associatedPullRequests(first: 1, states: OPEN) { nodes { number title url } } }";
-
-// shortcut: only the first 100 review threads and check contexts per PR are
-// read; paginate them if a PR ever needs more for an exact count.
-const OPEN_DETAILS = `
-  reviewDecision mergeable ${STACK}
-  reviewThreads(first: 100) { nodes { isResolved comments(first: 1) { nodes { state } } } }
-  commits(last: 1) { nodes { commit { statusCheckRollup {
-    state
-    contexts(first: 100) { nodes {
-      __typename
-      ... on CheckRun { ${CHECK_RUN} }
-      ... on StatusContext { context state description targetUrl createdAt }
-    } }
-  } } } }`;
-
-const MINE = "is:pr author:@me archived:false sort:updated-desc";
-const OPEN_PRS = "is:pr is:open archived:false sort:updated-desc";
-
-export const PRS_QUERY = `query {
-  open: search(query: "${MINE} is:open", type: ISSUE, first: 50) {
-    issueCount nodes { ... on PullRequest { ${BASE} ${OPEN_DETAILS} } }
-  }
-  review: search(query: "${OPEN_PRS} review-requested:@me", type: ISSUE, first: 50) {
-    issueCount nodes { ... on PullRequest { ${BASE} ${OPEN_DETAILS} } }
-  }
-  assigned: search(query: "${OPEN_PRS} assignee:@me", type: ISSUE, first: 50) {
-    issueCount nodes { ... on PullRequest { ${BASE} ${OPEN_DETAILS} } }
-  }
-  merged: search(query: "${MINE} is:merged", type: ISSUE, first: 30) {
-    issueCount nodes { ... on PullRequest { ${BASE} } }
-  }
-  closed: search(query: "${MINE} is:closed is:unmerged", type: ISSUE, first: 30) {
-    issueCount nodes { ... on PullRequest { ${BASE} } }
-  }
-}`;
 
 // Loose shape of what the query returns; GitHub omits fields it skipped.
 interface RawContext {
@@ -152,6 +108,7 @@ export interface RawPr {
 export interface RawSearch {
   issueCount: number;
   nodes: (RawPr | Record<string, never>)[];
+  pageInfo?: { hasNextPage: boolean; endCursor: string | null };
 }
 
 const FAILED_RUN = new Set([
@@ -236,6 +193,14 @@ export function blockersOf(pr: Pr): string[] {
   }
   if (pr.reviewDecision === "REVIEW_REQUIRED") out.push("Awaiting review");
   return out;
+}
+
+/** Whether a row matches every word of a search, in its title, #number, repo, author, base branch or blockers. */
+export function matchesSearch(pr: Pr, query: string): boolean {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return true;
+  const text = [pr.title, `#${pr.number}`, pr.repo, pr.author, pr.baseRefName, ...pr.blockers].join(" ").toLowerCase();
+  return words.every((w) => text.includes(w));
 }
 
 export function toList(search: RawSearch): PrList {
@@ -394,31 +359,6 @@ export interface PrDetail {
   checks: CheckDetail[];
 }
 
-const COMMENT = "author { login avatarUrl(size: 64) } body createdAt url";
-
-// shortcut: first 100 threads, 50 comments per thread, last 100 comments and
-// 50 reviews; paginate if a PR ever outgrows that.
-export const PR_DETAIL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
-  viewer { login }
-  repository(owner: $owner, name: $name) { pullRequest(number: $number) {
-    id number title url isDraft state createdAt body changedFiles additions deletions
-    author { login avatarUrl(size: 64) } headRefName baseRefName reviewDecision mergeable
-    repository { nameWithOwner defaultBranchRef { name } } ${STACK}
-    reviewThreads(first: 100) { nodes {
-      id isResolved isOutdated path line originalLine startLine diffSide resolvedBy { login }
-      comments(first: 50) { nodes { ${COMMENT} diffHunk state } }
-    } }
-    pendingReview: reviews(states: PENDING, first: 1) { nodes { id } }
-    comments(last: 100) { nodes { ${COMMENT} } }
-    reviews(last: 50) { nodes { author { login avatarUrl(size: 64) } state body submittedAt url } }
-    commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
-      __typename
-      ... on CheckRun { ${CHECK_RUN} title summary
-        annotations(first: 20) { nodes { message path annotationLevel location { start { line } } } } }
-      ... on StatusContext { context state description targetUrl createdAt }
-    } } } } } }
-  } }
-}`;
 
 type RawAuthor = { login: string; avatarUrl?: string } | null;
 interface RawComment {
@@ -559,26 +499,6 @@ export function toDetail(raw: RawDetail, viewer = ""): PrDetail {
 export const ALERTS_NEW = "pr-alerts";
 export const ALERTS_SEEN = "pr-alerts-seen";
 
-const WHO = "author { __typename login } createdAt url";
-
-// Open PRs only, with the latest few comments from every source so an
-// ignored bot posting last cannot hide a person's comment.
-export const WATCH_QUERY = `query {
-  viewer { login }
-  open: search(query: "${MINE} is:open", type: ISSUE, first: 50) {
-    nodes { ... on PullRequest {
-      id number title url author { login } repository { nameWithOwner }
-      comments(last: 5) { nodes { ${WHO} } }
-      reviews(last: 5) { nodes { author { __typename login } submittedAt url } }
-      reviewThreads(first: 100) { nodes { comments(last: 5) { nodes { ${WHO} } } } }
-      commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { nodes {
-        __typename
-        ... on CheckRun { ${CHECK_RUN} }
-        ... on StatusContext { context state description targetUrl createdAt }
-      } } } } } }
-    } }
-  }
-}`;
 
 interface RawWho {
   author: { __typename?: string; login: string } | null;
@@ -745,17 +665,6 @@ export function toFiles(files: RestFile[]): PrFile[] {
   }));
 }
 
-// ---- Writes: only ever sent from an explicit Reply or Comment click ----
-
-export const REPLY_MUTATION = `mutation($threadId: ID!, $body: String!) {
-  addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
-    comment { url state }
-  }
-}`;
-
-export const COMMENT_MUTATION = `mutation($subjectId: ID!, $body: String!) {
-  addComment(input: { subjectId: $subjectId, body: $body }) { commentEdge { node { url } } }
-}`;
 
 // ---- Reviewing: line comments and submitting a review ----
 
@@ -832,47 +741,6 @@ export function canSubmitReview(event: ReviewEvent, body: string, pendingComment
   if (event === "REQUEST_CHANGES") return body.trim() !== "";
   return body.trim() !== "" || pendingComments > 0;
 }
-
-// A range adds startLine/startSide; they are left out entirely for one line.
-const thread = (range: boolean) =>
-  "path: $path, line: $line, side: $side, body: $body" + (range ? ", startLine: $startLine, startSide: $startSide" : "");
-const threadVars = (range: boolean) =>
-  "$path: String!, $line: Int!, $side: DiffSide!, $body: String!" + (range ? ", $startLine: Int!, $startSide: DiffSide!" : "");
-
-/** A new pending review holding its first line comment (or, with $event, posted at once). */
-export const reviewStartMutation = (range: boolean) => `mutation($prId: ID!, ${threadVars(range)}, $event: PullRequestReviewEvent) {
-  addPullRequestReview(input: { pullRequestId: $prId, event: $event, threads: [{ ${thread(range)} }] }) {
-    pullRequestReview { id state }
-  }
-}`;
-
-export const reviewAddThreadMutation = (range: boolean) => `mutation($reviewId: ID!, ${threadVars(range)}) {
-  addPullRequestReviewThread(input: { pullRequestReviewId: $reviewId, ${thread(range)} }) { thread { id } }
-}`;
-
-export const REVIEW_DISCARD_MUTATION = `mutation($reviewId: ID!) {
-  deletePullRequestReview(input: { pullRequestReviewId: $reviewId }) { pullRequestReview { id } }
-}`;
-
-export const REVIEW_SUBMIT_PENDING_MUTATION = `mutation($reviewId: ID!, $event: PullRequestReviewEvent!, $body: String) {
-  submitPullRequestReview(input: { pullRequestReviewId: $reviewId, event: $event, body: $body }) {
-    pullRequestReview { url state }
-  }
-}`;
-
-export const REVIEW_SUBMIT_NEW_MUTATION = `mutation($prId: ID!, $event: PullRequestReviewEvent!, $body: String) {
-  addPullRequestReview(input: { pullRequestId: $prId, event: $event, body: $body }) {
-    pullRequestReview { url state }
-  }
-}`;
-
-export const CLOSE_PR_MUTATION = `mutation($prId: ID!) {
-  closePullRequest(input: { pullRequestId: $prId }) { pullRequest { state } }
-}`;
-
-export const REOPEN_PR_MUTATION = `mutation($prId: ID!) {
-  reopenPullRequest(input: { pullRequestId: $prId }) { pullRequest { state } }
-}`;
 
 
 // ---- Mapping the diff viewer's line selection to a GitHub comment ----

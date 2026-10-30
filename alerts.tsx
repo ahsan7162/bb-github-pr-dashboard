@@ -108,14 +108,14 @@ export function AlertsStrip() {
   useRealtime(ALERTS_NEW, catchUp);
   if (shown.length === 0) return null;
   return (
-    <section aria-label="New alerts" className="overflow-hidden rounded-xl border border-border bg-card">
-      <header className="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-2 text-xs">
+    <section aria-label="New alerts" className="overflow-hidden rounded-[var(--prd-radius-panel)] border border-border">
+      <header className="flex items-center gap-2 border-b border-border px-4 py-3 text-xs">
         <Icon name="BellDot" className="size-3.5 text-destructive" aria-hidden />
         <span className="font-semibold">New since you last looked</span>
         <span className="rounded-full bg-destructive/10 px-1.5 tabular-nums text-destructive">{shown.length}</span>
         <button
           onClick={() => setShown([])}
-          className="ml-auto rounded px-1.5 py-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+          className="ml-auto rounded-[var(--prd-radius-control)] px-1.5 py-0.5 text-muted-foreground outline-none transition-colors duration-[var(--prd-hover)] ease-[var(--prd-ease-out)] hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
         >
           Dismiss
         </button>
@@ -125,7 +125,7 @@ export function AlertsStrip() {
           <li key={a.id}>
             <button
               onClick={() => open(a)}
-              className="flex w-full items-start gap-2.5 px-3 py-2 text-left hover:bg-accent/40"
+              className="flex w-full items-start gap-3 px-4 py-3 text-left outline-none transition-colors duration-[var(--prd-hover)] ease-[var(--prd-ease-out)] hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
             >
               <Icon name={ICON[a.kind].name} className={cn("mt-0.5 size-4 shrink-0", ICON[a.kind].className)} aria-hidden />
               <span className="min-w-0 flex-1">

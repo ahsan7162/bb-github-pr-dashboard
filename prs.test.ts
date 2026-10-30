@@ -1,7 +1,7 @@
 // Run: node --test prs.test.ts   (Node 22.18+ strips the types itself)
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { canSubmitReview, checkOf, commentRange, commentTarget, fullPatch, rangeFromSelection, diffWatch, latestChecks, parsePatch, reviewEvents, stackOf, threadStatus, toDetail, toFiles, toList, toPr, toWatched, type RawDetail, type RawPr, type RawWatchPr, type Watched } from "./prs.ts";
+import { canSubmitReview, checkOf, matchesSearch, commentRange, commentTarget, fullPatch, rangeFromSelection, diffWatch, latestChecks, parsePatch, reviewEvents, stackOf, threadStatus, toDetail, toFiles, toList, toPr, toWatched, type RawDetail, type RawPr, type RawWatchPr, type Watched } from "./prs.ts";
 
 const base: RawPr = {
   id: "PR_1",
@@ -335,4 +335,16 @@ test("full patch: git headers for modified, added, removed and renamed files", (
   assert.match(fullPatch({ path: "n.ts", previousPath: null, status: "added", patch: hunk }), /^diff --git a\/n.ts b\/n.ts\n--- \/dev\/null\n\+\+\+ b\/n.ts\n/);
   assert.match(fullPatch({ path: "o.ts", previousPath: null, status: "removed", patch: hunk }), /\n--- a\/o.ts\n\+\+\+ \/dev\/null\n/);
   assert.match(fullPatch({ path: "new.ts", previousPath: "old.ts", status: "renamed", patch: hunk }), /^diff --git a\/old.ts b\/new.ts\n--- a\/old.ts\n\+\+\+ b\/new.ts\n/);
+});
+
+test("search matches every word across title, number, repo, author and blockers", () => {
+  const pr = { ...toPr({ ...base, author: { login: "priya-n" } } as RawPr), blockers: ["CI failing (1 check)"] };
+  assert.equal(matchesSearch(pr, ""), true);
+  assert.equal(matchesSearch(pr, "  "), true);
+  assert.equal(matchesSearch(pr, "fix"), true);
+  assert.equal(matchesSearch(pr, "#7"), true);
+  assert.equal(matchesSearch(pr, "o/r PRIYA"), true);
+  assert.equal(matchesSearch(pr, "failing fix"), true);
+  assert.equal(matchesSearch(pr, "fix #8"), false);
+  assert.equal(matchesSearch(pr, "sam"), false);
 });

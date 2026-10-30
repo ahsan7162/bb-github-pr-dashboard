@@ -17,7 +17,13 @@ A **My PRs** page in the bb navigation rail: your open, merged and closed
 GitHub pull requests grouped by repository, and for each open one why it is
 not merged yet (draft, conflicts, failing CI with the failing pipeline and
 job, CI running, changes requested, unresolved review comments, awaiting
-review). Click a PR for its detail view: CI checks with annotations and log
+review). Search the list by title, #number, repo or author, hide the repos
+you don't want to see, and fold a repo's group on any tab (both remembered across
+restarts); on Merged and Closed, search and the repo choices cover your whole
+history, up to the 1,000 GitHub search returns. Collapse all or Expand all folds every
+group on a tab. Keys: j and k move between PRs, Enter opens one and / jumps to search; on a
+PR, j and k move between files, n and p between unresolved comments, and [ and ] open the
+previous or next PR in the list. Coming back to the list lands where you left it. Click a PR for its detail view: CI checks with annotations and log
 links, review threads (unresolved first, with replies and who has the last
 word), and the conversation. Review requested (you or your teams) and
 Assigned tabs cover other people's PRs. The detail view also shows changed
@@ -29,19 +35,21 @@ to threads, comment, or close and reopen the PR.
 A background watcher alerts you (toast, rail badge, desktop notification) when
 CI starts failing or someone comments.
 
-- `server.ts` — the `prs_list`, `pr_detail` and `pr_files` RPCs; the writes
+- `server.ts` — the `prs_list`, `prs_history`, `pr_detail` and `pr_files` RPCs; the writes
   `pr_reply`, `pr_comment`, `pr_line_comment`, `pr_submit_review`,
   `pr_discard_review` and `pr_set_state`, each sent only on an explicit click; the `watch` background
   service; and the `alerts_*` RPCs. Gets a token from the
   `token` setting, else from `gh auth token`, and sends GraphQL to GitHub.
-- `prs.ts` — the GraphQL queries and the pure mapping to rows, blockers,
-  checks, threads and the timeline.
+- `prs.ts` — the pure mapping to rows, blockers, checks, threads and the
+  timeline; `queries.ts` holds the GraphQL text (server only).
 - `prs.test.ts` — tests for that mapping and the alert diff (`npm test`).
 - `alerts.tsx` — the alert listener (toasts, desktop notifications), the My PRs
   badge, the "New since you last looked" strip, and the Notifications section
   on the plugin settings page.
 - `app.tsx` — the page (`app.slots.navPanel`); `/plugins/bb-github-pr-dashboard/prs/<owner>/<repo>/<number>`
   opens a PR's detail view (`detail.tsx`). `parts.tsx` holds shared bits.
+- `MASTER.md` — the design system (theses, tokens, components, navigation);
+  `tokens.css` holds its values as CSS variables.
 - `PLUGIN_OVERVIEW.md` — the store listing text; keep it in step with
   `bb.description` in `package.json`.
 
@@ -85,7 +93,8 @@ npm install
 npm test
 bb plugin install .
 bb plugin dev          # rebuild and reload on save
-bb plugin rpc call bb-github-pr-dashboard prs_list
+echo '{"tab":"open"}' > tab.json   # open, review, assigned, merged or closed
+bb plugin rpc call bb-github-pr-dashboard prs_list --input-file tab.json
 echo '{"repo":"owner/name","number":1}' > in.json
 bb plugin rpc call bb-github-pr-dashboard pr_detail --input-file in.json
 ```
@@ -95,7 +104,7 @@ bb plugin rpc call bb-github-pr-dashboard pr_detail --input-file in.json
 Install from Git (bb builds it on install):
 
 ```
-bb plugin install git:https://github.com/ahsan7162/bb-github-pr-dashboard.git@^0.2.0
+bb plugin install git:https://github.com/ahsan7162/bb-github-pr-dashboard.git@^0.3.0
 ```
 
 To release: bump `version` in `package.json`, run `npm test` and
