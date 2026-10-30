@@ -1,6 +1,9 @@
-# bb-github-pr-dashboard
 
-<!-- The tour video is a GitHub attachment (dragged into this file in the web editor), so it never enters git: bb clones this repo on every install. -->
+ # bb-github-pr-dashboard
+ 
+https://github.com/user-attachments/assets/14e2303b-f8a5-4c6f-998b-6c0431eae648
+
+
 
 A 60-second tour: the dashboard and its filters, CI failures down to the test,
 alerts, comment threads, syntax-highlighted diffs and code review, all inside bb.
