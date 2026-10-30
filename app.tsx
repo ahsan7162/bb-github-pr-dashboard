@@ -173,7 +173,7 @@ function Stat({ label, value, tone, icon }: { label: string; value: number; tone
 function OpenStats({ items }: { items: Pr[] }) {
   const count = (test: (pr: Pr) => boolean) => items.filter(test).length;
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+    <div className="grid grid-cols-2 gap-2 @xl:grid-cols-4 @6xl:grid-cols-2">
       <Stat label="CI failing" icon="CircleX" tone="bad" value={count((p) => p.ci === "failing")} />
       <Stat label="Unresolved comments" icon="MessageSquare" tone="bad" value={count((p) => p.unresolvedThreads > 0)} />
       <Stat
@@ -220,6 +220,8 @@ function ListView({
 }) {
   const list = data?.[tab];
   const pluginId = experimental_usePluginId();
+  // Wide tabs, Open tab: alerts and totals move to a right column beside the PRs.
+  const side = tab === "open" && !!list && list.items.length > 0;
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
@@ -263,17 +265,23 @@ function ListView({
           {error}
         </div>
       ) : null}
-      <AlertsStrip />
+      {/* Same tree on every tab, so the alerts strip never remounts (it marks alerts seen on mount). */}
+      <div className={cn("grid gap-4", side && "@6xl:grid-cols-[minmax(0,1fr)_22rem] @6xl:items-start")}>
+        <aside className={cn("min-w-0 space-y-4 empty:hidden", side && "@6xl:sticky @6xl:top-3 @6xl:col-start-2 @6xl:row-start-1")}>
+          <AlertsStrip />
+          {side ? <OpenStats items={list.items} /> : null}
+        </aside>
+        <div className={cn("min-w-0 space-y-4", side && "@6xl:col-start-1 @6xl:row-start-1")}>
       {list === undefined ? (
         error ? null : <Skeleton rows={4} />
       ) : (
         <>
-          {tab === "open" && list.items.length > 0 ? <OpenStats items={list.items} /> : null}
           {list.items.length === 0 ? (
             <EmptyState icon="GitPullRequest">{EMPTY[tab]}</EmptyState>
           ) : (
-            groupByRepo(list.items).map(([repo, prs]) => (
-              <section key={repo} className="space-y-1.5">
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,30rem),1fr))] items-start gap-4">
+            {groupByRepo(list.items).map(([repo, prs]) => (
+              <section key={repo} className="min-w-0 space-y-1.5">
                 <RepoHeader repo={repo} count={prs.length} />
                 <ul className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-card">
                   {prs.map((pr) => (
@@ -286,7 +294,8 @@ function ListView({
                   ))}
                 </ul>
               </section>
-            ))
+            ))}
+            </div>
           )}
           {list.total > list.items.length ? (
             <p className="text-center text-xs text-muted-foreground">
@@ -295,6 +304,8 @@ function ListView({
           ) : null}
         </>
       )}
+        </div>
+      </div>
     </>
   );
 }
@@ -332,7 +343,7 @@ function PrsPage({ subPath }: { subPath: string }) {
   return (
     // Keyed by route so opening a PR starts at the top.
     <div key={route ? subPath : "list"} className="h-full min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto box-border w-full max-w-3xl space-y-4 px-3 pb-6 pt-3 sm:px-4 md:px-5 md:pt-4">
+      <div className="@container mx-auto box-border w-full max-w-[100rem] space-y-4 px-3 pb-6 pt-3 sm:px-4 md:px-5 md:pt-4">
         {route ? (
           <PrDetailView
             repo={route.repo}

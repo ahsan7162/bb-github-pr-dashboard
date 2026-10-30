@@ -990,9 +990,11 @@ function ThreadsTab({
       {shown.length === 0 ? (
         <EmptyState icon="CircleCheck">{filter === "unresolved" ? "Every thread is resolved." : "No resolved threads yet."}</EmptyState>
       ) : (
-        shown.map((t, i) => (
-          <ThreadCard key={t.id || `${filter}-${i}`} thread={t} viewer={viewer} author={author} onPosted={onPosted} />
-        ))
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,34rem),1fr))] items-start gap-3">
+          {shown.map((t, i) => (
+            <ThreadCard key={t.id || `${filter}-${i}`} thread={t} viewer={viewer} author={author} onPosted={onPosted} />
+          ))}
+        </div>
       )}
     </div>
   );
@@ -1013,7 +1015,8 @@ function ConversationTab({
 }) {
   const rpc = useRpc<typeof rpcContract>();
   return (
-    <div className="space-y-4">
+    // A conversation is prose: keep its lines readable on wide tabs.
+    <div className="max-w-4xl space-y-4">
       {timeline.length === 0 ? <EmptyState icon="MessageSquare">No comments yet.</EmptyState> : <Timeline timeline={timeline} prUrl={prUrl} />}
       {subjectId ? (
         <section aria-label="Add a comment" className="space-y-2 rounded-xl border border-border bg-card p-3">
@@ -1213,7 +1216,9 @@ export function PrDetailView({
         </div>
       </div>
 
-      <header className="space-y-3 rounded-xl border border-border bg-card p-4">
+      {/* Wide tabs: the summary moves to a sticky right column; it stays first in the markup for narrow tabs and screen readers. */}
+      <div className="grid gap-4 @6xl:grid-cols-[minmax(0,1fr)_22rem] @6xl:items-start">
+      <header className="space-y-3 rounded-xl border border-border bg-card p-4 @6xl:sticky @6xl:top-3 @6xl:col-start-2 @6xl:row-start-1">
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <Pill tone={state.tone} icon={state.icon}>
             {state.label}
@@ -1275,6 +1280,7 @@ export function PrDetailView({
         ) : null}
       </header>
 
+      <div className="min-w-0 space-y-4 @6xl:col-start-1 @6xl:row-start-1">
       {error ? (
         <div role="alert" className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
           {error}
@@ -1317,6 +1323,8 @@ export function PrDetailView({
           ) : null}
         </>
       )}
+      </div>
+      </div>
     </div>
   );
 }
