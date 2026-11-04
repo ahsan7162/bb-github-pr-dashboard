@@ -1,14 +1,15 @@
 // The detail view for one PR: CI checks, changed files (with line comments and
 // review submission), review threads (with replies), the conversation (with a
 // comment box), and closing or reopening the PR.
-import { Component, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
-import { Markdown, UrlLink, experimental_useCodeTheme, useBbNavigate, useRpc } from "@get-bb/plugin-sdk/app";
+import { Markdown, UrlLink, experimental_useCodeTheme, useBbNavigate, useRpc, useSdk } from "@get-bb/plugin-sdk/app";
 import { PatchDiff, type DiffLineAnnotation, type SelectedLineRange } from "@pierre/diffs/react";
 import type { rpcContract } from "./server";
 import {
   canSubmitReview,
+  fixPrompt,
   fullPatch,
   parsePatch,
   rangeFromSelection,
@@ -16,6 +17,7 @@ import {
   toViewerSide,
   threadStatus,
   type CommentRange,
+  type FixSubject,
   type ReviewEvent,
   type CheckDetail, type Comment, type Pr, type PrDetail, type PrFile, type Thread, type TimelineEntry } from "./prs";
 import {
@@ -175,6 +177,49 @@ function Composer({
   );
 }
 
+// ---- Fix with agent ----
+
+/** The PR on screen, for "Fix with agent" buttons deep in the tabs. */
+const PrContext = createContext<PrDetail | null>(null);
+
+/** Sends a comment or failed job to the bb thread on this PR's branch, else opens a new thread prefilled with it. */
+function FixWithAgent({ subject }: { subject: FixSubject }) {
+  const pr = useContext(PrContext);
+  const rpc = useRpc<typeof rpcContract>();
+  const sdk = useSdk();
+  const nav = useBbNavigate();
+  const [busy, setBusy] = useState(false);
+  if (!pr) return null;
+  const run = async () => {
+    setBusy(true);
+    const prompt = fixPrompt(pr, subject);
+    let projectId: string | null = null;
+    try {
+      const target = await rpc.call("pr_agent_target", { repo: pr.repo, number: pr.number, headRefName: pr.headRefName });
+      projectId = target.projectId;
+      const thread = target.thread;
+      if (thread) {
+        await sdk.threads.send({ threadId: thread.id, mode: "queue-if-active", input: [{ type: "text", text: prompt, mentions: [] }] });
+        toast.success(`Sent to ${thread.title}`, { action: { label: "Open", onClick: () => nav.toThread(thread.id) } });
+        return;
+      }
+    } catch (cause) {
+      toast.error("Could not send it to the PR's thread, so starting a new one", {
+        description: cause instanceof Error ? cause.message : String(cause),
+      });
+    } finally {
+      setBusy(false);
+    }
+    nav.toCompose({ ...(projectId ? { projectId } : {}), initialPrompt: prompt, focusPrompt: true });
+  };
+  return (
+    <Button size="sm" variant="outline" onClick={run} disabled={busy}>
+      <Icon name="Sparkles" className="size-3.5" />
+      Fix with agent
+    </Button>
+  );
+}
+
 // ---- Checks ----
 
 function checkName(c: CheckDetail) {
@@ -255,14 +300,19 @@ function AttentionCheck({ check }: { check: CheckDetail }) {
           </div>
         </details>
       ) : null}
-      {check.url ? (
-        <UrlLink
-          href={check.url}
-          className="inline-flex items-center gap-1 rounded-[var(--prd-radius-control)] border border-border px-2 py-1 text-xs font-medium transition-colors duration-[var(--prd-hover)] ease-[var(--prd-ease-out)] hover:bg-accent"
-        >
-          View logs
-          <Icon name="ExternalLink" className="size-3" aria-hidden />
-        </UrlLink>
+      {failing || check.url ? (
+      <div className="flex flex-wrap items-center gap-2">
+        {failing ? <FixWithAgent subject={{ kind: "check", check }} /> : null}
+        {check.url ? (
+          <UrlLink
+            href={check.url}
+            className="inline-flex items-center gap-1 rounded-[var(--prd-radius-control)] border border-border px-2 py-1 text-xs font-medium transition-colors duration-[var(--prd-hover)] ease-[var(--prd-ease-out)] hover:bg-accent"
+          >
+            View logs
+            <Icon name="ExternalLink" className="size-3" aria-hidden />
+          </UrlLink>
+        ) : null}
+      </div>
       ) : null}
     </div>
   );
@@ -999,6 +1049,7 @@ function ThreadCard({
                 Reply
               </Button>
             ) : null}
+            {!thread.isResolved ? <FixWithAgent subject={{ kind: "thread", thread }} /> : null}
             {thread.comments[0] ? (
               <UrlLink
                 href={thread.comments[0].url}
@@ -1667,6 +1718,7 @@ export function PrDetailView({
                 <FileList files={files} threads={detail.threads} currentFile={currentFile} onJump={(path) => jump(path, "files")} />
               </nav>
             ) : null}
+            <PrContext.Provider value={detail}>
             <div className="min-w-0">
             {activeTab === "checks" ? <ChecksTab checks={detail.checks} /> : null}
             {activeTab === "files" ? (
@@ -1699,6 +1751,7 @@ export function PrDetailView({
               <ConversationTab timeline={detail.timeline} prUrl={detail.url} subjectId={detail.id} onPosted={load} />
             ) : null}
             </div>
+            </PrContext.Provider>
           </div>
         </div>
       )}

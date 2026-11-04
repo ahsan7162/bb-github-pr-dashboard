@@ -15,6 +15,7 @@ import {
 } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
+  agentTarget,
   canSubmitReview,
   ALERTS_NEW,
   ALERTS_SEEN,
@@ -239,12 +240,32 @@ export const rpcContract = defineRpcContract({
     input: z.object({ prId: nodeId, action: z.enum(["close", "reopen"]) }).strict(),
     output: z.object({ state: z.string() }),
   },
+  /** Read-only: which bb thread works on this PR's branch, else which project a new thread should start in. */
+  pr_agent_target: {
+    input: z
+      .object({
+        repo: prRef.shape.repo,
+        number: prRef.shape.number,
+        headRefName: z.string().min(1).max(255),
+      })
+      .strict(),
+    output: z.object({
+      thread: z.object({ id: z.string(), title: z.string() }).nullable(),
+      projectId: z.string().nullable(),
+    }),
+  },
   alerts_list: { input: z.null(), output: alertsSchema },
   alerts_mark_seen: { input: z.null(), output: alertsSchema },
   alerts_test: { input: z.null(), output: alertsSchema },
 });
 
 const MAX_ALERTS = 50;
+
+/** The part of bb's GitHub PR Status `pullRequests` answer read here: each environment's PR, when it has one. */
+const prStatusSchema = z.record(
+  z.string(),
+  z.object({ outcome: z.string(), pullRequest: z.object({ url: z.string() }).optional() }),
+);
 
 /** Resolves after `ms`, or at once when the service is told to stop. */
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -551,6 +572,36 @@ export default async function plugin(bb: BbPluginApi) {
       const pr = Object.values(data)[0]?.pullRequest;
       if (!pr) throw new Error(`GitHub did not ${action} the pull request`);
       return { state: pr.state };
+    },
+    pr_agent_target: async ({ repo, number, headRefName }) => {
+      const projects = await bb.sdk.projects.list();
+      const threads: Awaited<ReturnType<typeof bb.sdk.threads.list>> = [];
+      // shortcut: the first 1,000 open threads; page further if someone keeps more.
+      const PAGE = 100;
+      for (let offset = 0; offset < 1000; offset += PAGE) {
+        const page = await bb.sdk.threads.list({ limit: PAGE, offset });
+        threads.push(...page);
+        if (page.length < PAGE) break;
+      }
+      const onBranch = threads.filter((t) => t.environmentId !== null && t.environmentBranchName === headRefName);
+      const prUrlByEnvironment: Record<string, string> = {};
+      if (onBranch.length > 0) {
+        try {
+          const rows = await bb.sdk.plugins.callRpc({
+            pluginId: "bb--github-pr-status",
+            method: "pullRequests",
+            input: { keys: [...new Set(onBranch.map((t) => t.environmentId!))] },
+            outputSchema: prStatusSchema,
+          });
+          for (const [environmentId, row] of Object.entries(rows)) {
+            if (row.pullRequest) prUrlByEnvironment[environmentId] = row.pullRequest.url;
+          }
+        } catch (cause) {
+          // Disabled or failing: the project's git remote decides instead.
+          bb.log.warn(`GitHub PR Status lookup skipped: ${cause instanceof Error ? cause.message : String(cause)}`);
+        }
+      }
+      return agentTarget({ url: `https://github.com/${repo}/pull/${number}`, repo, headRefName }, onBranch, projects, prUrlByEnvironment);
     },
     alerts_list: async () => summary(await readAlerts()),
     alerts_mark_seen: async () => {

@@ -795,3 +795,97 @@ export function prFromUrl(href: string): { repo: string; number: number } | null
   if (url.protocol !== "https:" || url.hostname !== "github.com" || url.hash || !m) return null;
   return { repo: `${m[1]}/${m[2]}`, number: Number(m[3]) };
 }
+
+// ---- Fix with agent ----
+
+/** What a "Fix with agent" button hands over: one review thread, or one failed check. */
+export type FixSubject = { kind: "thread"; thread: Thread } | { kind: "check"; check: CheckDetail };
+
+const MAX_QUOTE = 6000;
+const MAX_ANNOTATIONS = 20;
+
+/** Text from GitHub, fenced one backtick longer than any run inside it so a bot's ``` blocks stay whole. */
+function quote(text: string): string {
+  const trimmed = text.trim();
+  const body = trimmed.length > MAX_QUOTE ? `${trimmed.slice(0, MAX_QUOTE)}\n… (cut here, the rest is on GitHub)` : trimmed;
+  const fence = "`".repeat(Math.max(2, ...(body.match(/`+/g) ?? []).map((run) => run.length)) + 1);
+  return `${fence}\n${body}\n${fence}`;
+}
+
+/** The prompt an agent gets: the PR and its branch, then the comment with its replies, or the failed job with its errors. */
+export function fixPrompt(pr: Pick<PrDetail, "url" | "repo" | "headRefName">, subject: FixSubject): string {
+  const head = `Pull request ${pr.url} (${pr.repo}, branch \`${pr.headRefName}\`).`;
+  if (subject.kind === "thread") {
+    const t = subject.thread;
+    const where = t.line === null ? "" : t.startLine && t.startLine !== t.line ? ` at lines ${t.startLine}–${t.line}` : ` at line ${t.line}`;
+    const notes = [t.side === "LEFT" ? "a line of the old version" : "", t.isOutdated ? "outdated: the code has changed since" : ""].filter(Boolean);
+    const [first, ...replies] = t.comments;
+    return [
+      head,
+      "",
+      `In \`${t.path}\`${where}${notes.length > 0 ? ` (${notes.join("; ")})` : ""} — review comment from @${first?.author ?? "unknown"}${first ? ` (${first.url})` : ""}:`,
+      quote(first?.body ?? ""),
+      ...replies.flatMap((c) => ["", `Reply from @${c.author}:`, quote(c.body)]),
+      "",
+      `Address this comment on branch \`${pr.headRefName}\`. If it is wrong, say why instead of changing the code.`,
+    ].join("\n");
+  }
+  const c = subject.check;
+  const errors = c.annotations
+    .slice(0, MAX_ANNOTATIONS)
+    .map((a) => `${a.path}${a.line ? `:${a.line}` : ""}${a.level ? ` ${a.level}` : ""}: ${a.message}`);
+  const more = c.annotations.length > MAX_ANNOTATIONS ? ` (the first ${MAX_ANNOTATIONS} of ${c.annotations.length})` : "";
+  return [
+    head,
+    "",
+    `The CI job "${c.workflow ? `${c.workflow} / ${c.name}` : c.name}" failed${c.conclusion ? ` (${c.conclusion.toLowerCase().replace(/_/g, " ")})` : ""}${c.title ? `: ${c.title}` : "."}`,
+    ...(errors.length > 0 ? ["", `Errors from the run${more}:`, quote(errors.join("\n"))] : []),
+    ...(c.url ? ["", `Logs: ${c.url}`] : []),
+    "",
+    `Find why it fails and fix it on branch \`${pr.headRefName}\`.`,
+  ].join("\n");
+}
+
+/** "owner/name", lowercased, from a GitHub git remote (https or ssh); null for anything else. */
+export function repoOfRemote(remote: string | null): string | null {
+  const match = remote?.match(/github\.com[:/]+([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
+  return match ? `${match[1]}/${match[2]}`.toLowerCase() : null;
+}
+
+/** The fields of bb's `threads.list` rows that pick a PR's thread. */
+export interface AgentThread {
+  id: string;
+  projectId: string;
+  environmentId: string | null;
+  environmentBranchName: string | null;
+  archivedAt: number | null;
+  updatedAt: number;
+  title: string | null;
+  titleFallback: string | null;
+}
+
+/**
+ * Where "Fix with agent" goes: the most recently updated thread whose environment is on the PR's head
+ * branch in the PR's repo, confirmed by bb's GitHub PR Status answer for that environment when it has one,
+ * else by the project's git remote; and, for a new thread, the project whose remote is the PR's repo.
+ */
+export function agentTarget(
+  pr: { url: string; repo: string; headRefName: string },
+  threads: readonly AgentThread[],
+  projects: readonly { id: string; gitRemoteUrl: string | null }[],
+  prUrlByEnvironment: Readonly<Record<string, string>>,
+): { thread: { id: string; title: string } | null; projectId: string | null } {
+  const repo = pr.repo.toLowerCase();
+  const remotes = new Map(projects.map((p) => [p.id, repoOfRemote(p.gitRemoteUrl)]));
+  const owner = threads
+    .filter((t) => {
+      if (t.archivedAt !== null || t.environmentId === null || t.environmentBranchName !== pr.headRefName) return false;
+      const known = prUrlByEnvironment[t.environmentId];
+      return known !== undefined ? known.toLowerCase() === pr.url.toLowerCase() : remotes.get(t.projectId) === repo;
+    })
+    .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  return {
+    thread: owner ? { id: owner.id, title: owner.title ?? owner.titleFallback ?? "the PR's thread" } : null,
+    projectId: projects.find((p) => remotes.get(p.id) === repo)?.id ?? null,
+  };
+}
