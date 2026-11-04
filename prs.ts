@@ -778,3 +778,20 @@ export function fullPatch(file: Pick<PrFile, "path" | "previousPath" | "status" 
     file.patch ?? "",
   ].join("\n");
 }
+
+/**
+ * A plain github.com pull request link → the PR it names. Null for anything else: other hosts,
+ * sub-pages (/files, /checks) and #comment links, which only GitHub can land on.
+ */
+export function prFromUrl(href: string): { repo: string; number: number } | null {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+  // Same owner/name rule as the server's prRef.
+  const m = /^\/([\w.-]+)\/([\w.-]+)\/pull\/([1-9]\d{0,9})\/?$/.exec(url.pathname);
+  if (url.protocol !== "https:" || url.hostname !== "github.com" || url.hash || !m) return null;
+  return { repo: `${m[1]}/${m[2]}`, number: Number(m[3]) };
+}

@@ -33,6 +33,10 @@ login (`gh auth login`) or a token; see [Requirements](#requirements).
 - **Move by keyboard.** From the list to a pull request, between its files and
   comments, and on to the next pull request.
 - **Hear about changes.** Alerts when CI starts failing or someone comments.
+- **PR links open here.** Click a github.com pull request link anywhere in bb (an
+  agent's message, the PR link beside the composer or in the Info tab) and it opens
+  in My PRs, or on GitHub if My PRs cannot load it. Cmd/Ctrl-click and "Open on
+  GitHub" links still go to GitHub.
 
 <!-- Screenshot: the list (drag list.png here in GitHub's web editor) -->
 

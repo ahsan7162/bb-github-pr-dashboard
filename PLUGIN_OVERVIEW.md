@@ -7,6 +7,7 @@ A **My PRs** page in the bb navigation rail for every pull request you are part 
 - Search by title, #number, repository or author. Hide repositories with a per-tab filter (Select all, Deselect all), fold a repository's group, or Collapse all. Hidden and folded repositories are remembered.
 - On Merged and Closed, search and the repository filter reach your whole history, up to the 1,000 results GitHub search returns.
 - Keys: j and k move between pull requests, Enter opens one, / searches. Coming back from a pull request returns you to where you were.
+- Clicking a github.com pull request link anywhere in bb, such as one in an agent's message or the PR link beside the composer or in a thread's Info tab, opens it here, even if it is not in your lists; if it cannot load, it opens on GitHub as before.
 
 ## A pull request
 

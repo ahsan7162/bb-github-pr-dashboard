@@ -3,9 +3,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import type { ReactNode } from "react";
 import { UrlLink, definePluginApp, experimental_usePluginId, useBbNavigate, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./server";
-import { matchesSearch, type Pr, type PrList } from "./prs";
+import { matchesSearch, prFromUrl, type Pr, type PrList } from "./prs";
 import "./tokens.css";
-import { PrDetailView, type ListPosition } from "./detail";
+import { PrDetailView, openedFromLink, type ListPosition } from "./detail";
 import { AlertListener, AlertsStrip, NotificationSettings, useAlertBadge } from "./alerts";
 import {
   EmptyState,
@@ -702,6 +702,8 @@ function PrsPage({ subPath }: { subPath: string }) {
     <div
       key={route ? subPath : "list"}
       ref={scroller}
+      data-my-prs-page // PrLinkListener leaves links in here alone
+
       onScroll={(e) => {
         if (!route) listScroll = e.currentTarget.scrollTop;
       }}
@@ -736,6 +738,36 @@ function PrsPage({ subPath }: { subPath: string }) {
   );
 }
 
+/**
+ * A plain click on a github.com PR link anywhere in bb opens the PR here instead.
+ * bb has no hook to take over links, so this reads clicks on real `<a href>` anchors. Only UrlLink is
+ * documented as one; that Markdown links and github-pr-status's PR links (beside the composer, Info tab)
+ * are anchors is observed in bb's bundles, not documented. Controls that call openUrl() with no href
+ * (the context card's PR row, "Open on GitHub" menu items) cannot be reached and still go to GitHub.
+ */
+function PrLinkListener() {
+  const nav = useBbNavigate();
+  useEffect(() => {
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = e.target instanceof Element ? e.target.closest("a[href]") : null;
+      if (!(a instanceof HTMLAnchorElement) || a.closest("[data-my-prs-page]")) return;
+      // A link that says where it goes ("Open on GitHub") keeps going there.
+      if (/\bon github/i.test(a.getAttribute("aria-label") ?? a.textContent ?? "")) return;
+      const pr = prFromUrl(a.href);
+      if (!pr) return;
+      // Capture phase on document runs before bb's own handlers; stopping here keeps them from also opening GitHub.
+      e.preventDefault();
+      e.stopPropagation();
+      openedFromLink.add(`${pr.repo}#${pr.number}`);
+      nav.toPluginPanel("prs", { subPath: `${pr.repo}/${pr.number}` });
+    };
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
+  }, [nav]);
+  return null;
+}
+
 export default definePluginApp((app) => {
   app.slots.navPanel({
     id: "prs",
@@ -746,6 +778,7 @@ export default definePluginApp((app) => {
     experimental_useBadge: useAlertBadge,
   });
   app.slots.experimental_appOverlay({ id: "pr-alerts", component: AlertListener });
+  app.slots.experimental_appOverlay({ id: "pr-links", component: PrLinkListener });
   app.slots.settingsSection({
     id: "notifications",
     title: "Notifications",

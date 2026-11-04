@@ -4,7 +4,7 @@
 import { Component, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { toast } from "sonner";
-import { Markdown, UrlLink, experimental_useCodeTheme, useRpc } from "@get-bb/plugin-sdk/app";
+import { Markdown, UrlLink, experimental_useCodeTheme, useBbNavigate, useRpc } from "@get-bb/plugin-sdk/app";
 import { PatchDiff, type DiffLineAnnotation, type SelectedLineRange } from "@pierre/diffs/react";
 import type { rpcContract } from "./server";
 import {
@@ -41,6 +41,8 @@ import { cn } from "@/lib/utils";
 
 // Survives remounts so a resize or coming back shows the last result at once.
 const cachedDetails = new Map<string, PrDetail>();
+// `owner/name#123` of PRs just opened from a GitHub link elsewhere in bb; if one cannot load, it goes to GitHub instead.
+export const openedFromLink = new Set<string>();
 
 const CONCLUSION: Record<string, string> = {
   FAILURE: "Failed",
@@ -1309,6 +1311,10 @@ export function PrDetailView({
 }) {
   const key = `${repo}#${number}`;
   const rpc = useRpc<typeof rpcContract>();
+  const navNow = useBbNavigate();
+  // A ref, as useBbNavigate() changes with the route and load must not refetch on that.
+  const nav = useRef(navNow);
+  nav.current = navNow;
   const [detail, setDetail] = useState<PrDetail | null>(cachedDetails.get(key) ?? null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1319,15 +1325,26 @@ export function PrDetailView({
       .call("pr_detail", { repo, number })
       .then(
         (result) => {
+          openedFromLink.delete(key);
           cachedDetails.set(key, result);
           setDetail(result);
           setError(null);
         },
-        (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)),
+        (cause: unknown) => {
+          // Opened from a link and nothing to show: open it on GitHub as bb would have, and go back to the link.
+          if (openedFromLink.delete(key) && !cachedDetails.has(key)) {
+            nav.current.openUrl(`https://github.com/${repo}/pull/${number}`);
+            history.back();
+            return;
+          }
+          setError(cause instanceof Error ? cause.message : String(cause));
+        },
       )
       .finally(() => setLoading(false));
   }, [rpc, repo, number, key]);
   useEffect(load, [load]);
+  // Leaving before it loads: a late failure must not send you anywhere.
+  useEffect(() => () => void openedFromLink.delete(key), [key]);
 
   const state = prState(detail ?? summary ?? { isDraft: false });
   // The stack line below the title already says "Stacked on #N", with a link.

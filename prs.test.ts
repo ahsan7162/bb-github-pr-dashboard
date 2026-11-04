@@ -1,7 +1,7 @@
 // Run: node --test prs.test.ts   (Node 22.18+ strips the types itself)
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { canSubmitReview, checkOf, matchesSearch, commentRange, commentTarget, fullPatch, rangeFromSelection, diffWatch, latestChecks, parsePatch, reviewEvents, stackOf, threadStatus, toDetail, toFiles, toList, toPr, toWatched, type RawDetail, type RawPr, type RawWatchPr, type Watched } from "./prs.ts";
+import { canSubmitReview, checkOf, matchesSearch, commentRange, commentTarget, fullPatch, prFromUrl, rangeFromSelection, diffWatch, latestChecks, parsePatch, reviewEvents, stackOf, threadStatus, toDetail, toFiles, toList, toPr, toWatched, type RawDetail, type RawPr, type RawWatchPr, type Watched } from "./prs.ts";
 
 const base: RawPr = {
   id: "PR_1",
@@ -347,4 +347,22 @@ test("search matches every word across title, number, repo, author and blockers"
   assert.equal(matchesSearch(pr, "failing fix"), true);
   assert.equal(matchesSearch(pr, "fix #8"), false);
   assert.equal(matchesSearch(pr, "sam"), false);
+});
+
+test("only a plain github.com PR link opens in My PRs", () => {
+  assert.deepEqual(prFromUrl("https://github.com/acme/my.repo_1/pull/42"), { repo: "acme/my.repo_1", number: 42 });
+  assert.deepEqual(prFromUrl("https://github.com/o/r/pull/42/?w=1"), { repo: "o/r", number: 42 });
+  for (const href of [
+    "https://github.com/o/r/pull/42#issuecomment-1",
+    "https://github.com/o/r/pull/42/files",
+    "https://github.com/o/r/issues/42",
+    "https://github.example.com/o/r/pull/42",
+    "http://github.com/o/r/pull/42",
+    "https://github.com/o/r/pull/0",
+    "https://github.com/o%2Fx/r/pull/42",
+    "/plugins/bb-github-pr-dashboard/prs/o/r/42",
+    "not a url",
+  ]) {
+    assert.equal(prFromUrl(href), null, href);
+  }
 });
