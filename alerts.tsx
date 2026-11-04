@@ -1,6 +1,6 @@
-// PR alerts on the client: toasts and desktop notifications as they arrive,
-// the My PRs badge, the "new since you last looked" strip, and the
-// notification controls on the plugin's settings page.
+// PR alerts on the client: toasts as they arrive, the My PRs badge, the "new
+// since you last looked" strip, and the test button on the plugin's settings
+// page. System notifications are sent by the server (see pushAlerts).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useBbNavigate, useRealtime, useRpc, useSettings, type ExperimentalBadge } from "@get-bb/plugin-sdk/app";
@@ -33,14 +33,11 @@ function useOpenAlert() {
   );
 }
 
-const canNotify = () => typeof Notification !== "undefined" && Notification.permission === "granted";
-
 /** How alerts may reach you, from the plugin settings; everything is on until settings load. */
 function useAlertPrefs() {
   const values = useSettings().values;
   return {
     toasts: values?.showToasts !== false,
-    desktop: values?.showDesktop !== false,
     badge: values?.showBadge !== false,
   };
 }
@@ -56,14 +53,6 @@ export function AlertListener() {
     for (const a of alertsIn(payload)) {
       if (prefs.current.toasts) {
         toast(a.headline, { description: a.detail, action: { label: "Open", onClick: () => open(a) } });
-      }
-      if (prefs.current.desktop && canNotify()) {
-        // The tag makes several open windows share one banner.
-        const n = new Notification(a.headline, { body: a.detail, tag: a.id });
-        n.onclick = () => {
-          window.focus();
-          open(a);
-        };
       }
     }
   });
@@ -141,52 +130,39 @@ export function AlertsStrip() {
   );
 }
 
-/** Plugin settings page: desktop permission and a test alert. */
+/** Plugin settings page: what reaches you, and a test that goes through every path. */
 export function NotificationSettings() {
   const rpc = useRpc<typeof rpcContract>();
-  const supported = typeof Notification !== "undefined";
-  const [permission, setPermission] = useState(supported ? Notification.permission : "denied");
   const [sending, setSending] = useState(false);
   return (
     <div className="space-y-3 text-sm">
       <p className="text-muted-foreground">
-        Alerts show as bb toasts and a badge on My PRs. Desktop notifications also appear while a bb window is open.
-        The watcher runs on the bb server, so it pauses when bb is not running.
+        Alerts show as bb toasts and a badge on My PRs. Desktop notifications go out through bb's Push notifications
+        plugin, one per check, to the channels turned on there: desktop and web while a bb window is open, and your
+        registered phones. The watcher runs on the bb server, so it pauses when bb is not running.
       </p>
-      <div className="flex flex-wrap items-center gap-2">
-        {permission === "granted" ? (
-          <span className="inline-flex items-center gap-1.5 text-success">
-            <Icon name="CircleCheck" className="size-4" aria-hidden />
-            Desktop notifications are on in this window
-          </span>
-        ) : permission === "denied" ? (
-          <span className="text-muted-foreground">
-            Desktop notifications are blocked here. Allow them for bb in your system or browser settings.
-          </span>
-        ) : (
-          <Button size="sm" onClick={() => void Notification.requestPermission().then(setPermission)}>
-            <Icon name="BellDot" className="size-4" />
-            Enable desktop notifications
-          </Button>
-        )}
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={sending}
-          onClick={() => {
-            setSending(true);
-            rpc.call("alerts_test").then(
-              () => setSending(false),
-              (cause: unknown) => {
-                setSending(false);
-                toast.error(cause instanceof Error ? cause.message : String(cause));
-              },
-            );
-          }}
-        >
-          Send test alert
-        </Button>
-      </div>
+      <Button
+        size="sm"
+        variant="outline"
+        disabled={sending}
+        onClick={() => {
+          setSending(true);
+          rpc.call("alerts_test").then(
+            ({ push }) => {
+              setSending(false);
+              if (push.sent) toast.success(push.message);
+              else toast.error(push.message);
+            },
+            (cause: unknown) => {
+              setSending(false);
+              toast.error(cause instanceof Error ? cause.message : String(cause));
+            },
+          );
+        }}
+      >
+        <Icon name="BellDot" className="size-4" />
+        Send test notification
+      </Button>
     </div>
   );
 }

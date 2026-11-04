@@ -118,18 +118,23 @@ controls.
 Every 5 minutes, the plugin checks your open pull requests and alerts you when a CI
 job starts failing, or when someone else comments or reviews. Each alert shows as a
 bb toast, adds a count to the My PRs icon, and waits in the "New since you last
-looked" list. Allow desktop notifications in the plugin settings for a system banner
-too. GitHub bot accounts are skipped. The bell on My PRs opens the settings:
+looked" list. Each check also sends one desktop notification through bb's built-in
+Push notifications plugin (several alerts become one summary), to the channels turned
+on there: desktop, web and registered phones. Clicking it opens bb; the toast's
+**Open** goes to the pull request. If Push notifications is disabled, the toast and
+badge still work and the plugin log says why nothing was sent. GitHub bot accounts
+are skipped. The bell on My PRs opens the settings, where **Send test notification**
+checks delivery:
 
 ```
 bb plugin config bb-github-pr-dashboard set notifyCi false
 bb plugin config bb-github-pr-dashboard set notifyComments false
 bb plugin config bb-github-pr-dashboard set showToasts false    # no bb toasts
-bb plugin config bb-github-pr-dashboard set showDesktop false   # no desktop banners
+bb plugin config bb-github-pr-dashboard set showDesktop false   # no desktop notifications
 bb plugin config bb-github-pr-dashboard set showBadge false     # no count on My PRs
 bb plugin config bb-github-pr-dashboard set ignoreAuthors "some-review-bot, ci-helper"
 bb plugin config bb-github-pr-dashboard set checkEveryMinutes 10
-bb plugin rpc call bb-github-pr-dashboard alerts_test   # send a test alert
+bb plugin rpc call bb-github-pr-dashboard alerts_test   # send a test alert and notification
 ```
 
 The first check for an account only records a baseline. Hiding a repository in the
@@ -150,7 +155,9 @@ list does not mute its alerts.
   write (write only for comments, replies, reviews, close and reopen) and Checks read.
   For organizations that enforce SAML SSO, authorize the token for them, or their
   pull requests are left out.
-- Alerts run while the bb server runs; desktop banners appear while a bb window is open.
+- Alerts run while the bb server runs. Desktop notifications need bb's Push
+  notifications plugin enabled; its desktop and web banners appear while a bb window
+  is open (any page, not only My PRs), and registered phones get them regardless.
 
 ## What it sends
 
@@ -159,7 +166,10 @@ request for the tab you open (with every tab's count), one for a pull request, o
 REST request when you open its Files tab, the Merged or Closed history only when you
 search or filter it, and one per alert check. **Fix with agent** asks bb, not GitHub, which thread is on the
 branch (bb's GitHub PR Status may check with GitHub). Alerts and their state stay in this
-plugin's storage on your bb server. The page loads 79 KB of script and 116 KB of CSS
+plugin's storage on your bb server. Desktop notifications hand each alert's headline
+(repository, number, who) and pull request title to bb's Push notifications plugin,
+which forwards them to registered phones through its push relay (Expo by default);
+turn `showDesktop` off to keep them on the server. The page loads 79 KB of script and 116 KB of CSS
 (24 KB and 9 KB gzipped); an install takes about 11 MB on disk.
 
 ## Develop
@@ -179,8 +189,9 @@ bb plugin rpc call bb-github-pr-dashboard pr_detail --input-file in.json
   writes `pr_reply`, `pr_comment`, `pr_line_comment`, `pr_submit_review`,
   `pr_discard_review` and `pr_set_state`, each sent only on an explicit click;
   `pr_agent_target`, which finds the bb thread on a pull request's branch for Fix with
-  agent; the `watch` background service; and the `alerts_*` RPCs. Gets a token from the `token`
-  setting, else from `gh auth token`.
+  agent; the `watch` background service, which sends desktop notifications through
+  push-notifications' `notifications.send`; and the `alerts_*` RPCs. Gets a token
+  from the `token` setting, else from `gh auth token`.
 - `queries.ts`: the GraphQL text (server only). `prs.ts`: the pure mapping to rows,
   blockers, checks, threads and the timeline. `prs.test.ts`: its tests and the alert
   diff's.

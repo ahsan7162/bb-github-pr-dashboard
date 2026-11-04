@@ -620,6 +620,12 @@ export function diffWatch(
   return { alerts, next };
 }
 
+/** One system notification for a whole check, so a busy poll does not send a burst. */
+export function pushText(alerts: Alert[]): { title: string; body: string } {
+  if (alerts.length === 1) return { title: alerts[0]!.headline, body: alerts[0]!.detail };
+  return { title: `${alerts.length} new PR alerts`, body: alerts.map((a) => a.headline).join("\n") };
+}
+
 /** Who a thread is waiting on, from the point of view of whoever is looking. */
 export type ThreadStatus = "resolved" | "waiting-on-you" | "you-replied" | "waiting-on-author" | "author-replied";
 

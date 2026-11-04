@@ -1,7 +1,7 @@
 // Run: node --test prs.test.ts   (Node 22.18+ strips the types itself)
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { agentTarget, canSubmitReview, checkOf, fixPrompt, repoOfRemote, matchesSearch, commentRange, commentTarget, fullPatch, prFromUrl, rangeFromSelection, diffWatch, latestChecks, parsePatch, reviewEvents, stackOf, threadStatus, toDetail, toFiles, toList, toPr, toWatched, type AgentThread, type RawDetail, type RawPr, type RawWatchPr, type Thread, type Watched } from "./prs.ts";
+import { agentTarget, canSubmitReview, checkOf, fixPrompt, repoOfRemote, matchesSearch, commentRange, commentTarget, fullPatch, prFromUrl, rangeFromSelection, diffWatch, latestChecks, parsePatch, pushText, reviewEvents, stackOf, threadStatus, toDetail, toFiles, toList, toPr, toWatched, type AgentThread, type RawDetail, type RawPr, type RawWatchPr, type Thread, type Watched } from "./prs.ts";
 
 const base: RawPr = {
   id: "PR_1",
@@ -205,6 +205,12 @@ test("watch: a newer comment alerts; an old one, a disabled kind or a brand-new 
   // A PR not in the previous snapshot: CI counts, its existing comments do not.
   const fresh = diffWatch({}, [pr({ lastComment: c, failing: ["CI › unit"] })], T, on);
   assert.deepEqual(fresh.alerts.map((a) => a.kind), ["ci"]);
+});
+
+test("push: one alert keeps its own text; several from one check become one summary", () => {
+  const { alerts } = diffWatch({}, [pr({ failing: ["CI › unit"] }), pr({ id: "PR_10", number: 10, failing: ["CI › lint"] })], T, on);
+  assert.deepEqual(pushText(alerts.slice(0, 1)), { title: "CI failing · o/r#9", body: "CI › unit — Add retries" });
+  assert.deepEqual(pushText(alerts), { title: "2 new PR alerts", body: "CI failing · o/r#9\nCI failing · o/r#10" });
 });
 
 // ---- stacks, thread status, files ----
