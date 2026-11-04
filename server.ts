@@ -3,8 +3,9 @@
 // `prs_list` runs one GitHub GraphQL query for one tab's PRs (open, review
 // requested, assigned, merged or closed) and every tab's count; `pr_detail` fetches one PR's threads, conversation and
 // checks. A background service polls open PRs and stores an alert when CI
-// starts failing or someone comments; the page shows them as toasts, desktop
-// notifications and a badge. Auth comes from the optional `token` setting, else
+// starts failing or someone comments; the page shows them as toasts and a badge,
+// and each check's alerts go out as one system notification through bb's
+// push-notifications plugin. Auth comes from the optional `token` setting, else
 // from the GitHub CLI already logged in on the machine (`gh auth token`), so
 // every user of a published copy sees their own PRs.
 import { execFile } from "node:child_process";
@@ -19,6 +20,7 @@ import {
   ALERTS_NEW,
   ALERTS_SEEN,
   diffWatch,
+  pushText,
   toDetail,
   toFiles,
   toList,
@@ -241,8 +243,14 @@ export const rpcContract = defineRpcContract({
   },
   alerts_list: { input: z.null(), output: alertsSchema },
   alerts_mark_seen: { input: z.null(), output: alertsSchema },
-  alerts_test: { input: z.null(), output: alertsSchema },
+  alerts_test: {
+    input: z.null(),
+    output: alertsSchema.extend({ push: z.object({ sent: z.boolean(), message: z.string() }) }),
+  },
 });
+
+// The published output of push-notifications' `notifications.send`.
+const pushSent = z.object({ ok: z.literal(true), channels: z.array(z.enum(["web", "desktop", "mobile"])) });
 
 const MAX_ALERTS = 50;
 
@@ -315,8 +323,8 @@ export default async function plugin(bb: BbPluginApi) {
     },
     showDesktop: {
       type: "boolean",
-      label: "Show desktop notifications",
-      description: "Also needs this window's permission: use Enable desktop notifications below.",
+      label: "Send desktop notifications",
+      description: "One system notification per check, sent through bb's Push notifications plugin to the channels on there (desktop, web, mobile).",
       default: true,
     },
     showBadge: {
@@ -392,13 +400,38 @@ export default async function plugin(bb: BbPluginApi) {
   const summary = (alerts: Alert[]) => ({ alerts, unread: alerts.filter((a) => !a.seen).length });
 
   // kv is the source of truth: a closed window catches up from it on next open.
-  async function addAlerts(alerts: Alert[]) {
+  async function addAlerts(alerts: Alert[]): Promise<Alert[]> {
     const stored = await readAlerts();
     const known = new Set(stored.map((a) => a.id));
     const fresh = alerts.filter((a) => !known.has(a.id));
-    if (fresh.length === 0) return;
+    if (fresh.length === 0) return [];
     await bb.storage.kv.set("alerts", [...fresh, ...stored].slice(0, MAX_ALERTS));
     bb.realtime.publish(ALERTS_NEW, { alerts: fresh });
+    return fresh;
+  }
+
+  /** One system notification for a batch. Never throws: the watcher must outlive a missing or disabled push-notifications. */
+  async function pushAlerts(alerts: Alert[]): Promise<{ sent: boolean; message: string }> {
+    if (alerts.length === 0) return { sent: false, message: "Nothing new to send." };
+    if (!(await settings.get()).showDesktop) {
+      return { sent: false, message: "Desktop notifications are off in this plugin's settings." };
+    }
+    let message: string;
+    try {
+      const { channels } = await bb.sdk.plugins.callRpc({
+        pluginId: "push-notifications",
+        method: "notifications.send",
+        input: pushText(alerts),
+        outputSchema: pushSent,
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (channels.length > 0) return { sent: true, message: `Sent to ${channels.join(", ")}.` };
+      message = "Push notifications reached no channel. Turn on desktop, web or mobile in its settings.";
+    } catch (cause) {
+      message = `Push notifications did not send it (${cause instanceof Error ? cause.message : String(cause)}). Check that the Push notifications plugin is enabled.`;
+    }
+    bb.log.warn(`Desktop notification not sent: ${message}`);
+    return { sent: false, message };
   }
 
   async function pollOnce() {
@@ -417,7 +450,7 @@ export default async function plugin(bb: BbPluginApi) {
     await bb.storage.kv.set("watch", { login: data.viewer.login, state: next });
     if (prev === null) bb.log.info(`Watching ${prs.length} open PRs for ${data.viewer.login} (new baseline)`);
     if (alerts.length > 0) bb.log.info(`${alerts.length} new PR alert(s)`);
-    await addAlerts(alerts);
+    await pushAlerts(await addAlerts(alerts));
   }
 
   bb.background.service("watch", {
@@ -561,12 +594,12 @@ export default async function plugin(bb: BbPluginApi) {
     },
     alerts_test: async () => {
       const at = new Date().toISOString();
-      await addAlerts([{
+      const push = await pushAlerts(await addAlerts([{
         id: `test:${at}`, kind: "test", repo: "", number: 0, url: "", seen: false, at,
         headline: "Test alert from GitHub PR Dashboard",
         detail: "This is how CI failures and new comments on your PRs will reach you.",
-      }]);
-      return summary(await readAlerts());
+      }]));
+      return { ...summary(await readAlerts()), push };
     },
   });
 }

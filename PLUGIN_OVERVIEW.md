@@ -20,16 +20,16 @@ A **My PRs** page in the bb navigation rail for every pull request you are part 
 ## Alerts
 
 - Every 5 minutes (you can change this), the plugin checks your open pull requests and alerts you when a CI job starts failing or someone else comments or reviews.
-- Each alert shows as a bb toast, adds a count to the **My PRs** icon, and waits in a "New since you last looked" list. Allow desktop notifications in the plugin settings for a system banner too.
-- In the plugin settings (the bell on My PRs), choose what alerts you and how, change the interval, or list review bots to ignore. GitHub bot accounts are skipped already. Hiding a repository in the list does not mute its alerts.
+- Each alert shows as a bb toast, adds a count to the **My PRs** icon, and waits in a "New since you last looked" list. Each check also sends one desktop notification (several alerts become one summary) through bb's Push notifications plugin, to the channels on there: desktop, web and registered phones.
+- In the plugin settings (the bell on My PRs), choose what alerts you and how, change the interval, list review bots to ignore, or send a test notification. GitHub bot accounts are skipped already. Hiding a repository in the list does not mute its alerts.
 
 ## How it works
 
-Requests go to GitHub only for what you open: one GraphQL request for the tab you open (with every tab's count), one for a pull request, one REST request when you open its Files tab, the Merged or Closed history only when you search or filter it, and one per alert check. All are sent from the bb server. Nothing is written to GitHub except what you send. Alerts and their state stay in this plugin's storage on your bb server.
+Requests go to GitHub only for what you open: one GraphQL request for the tab you open (with every tab's count), one for a pull request, one REST request when you open its Files tab, the Merged or Closed history only when you search or filter it, and one per alert check. All are sent from the bb server. Nothing is written to GitHub except what you send. Alerts and their state stay in this plugin's storage on your bb server. Desktop notifications hand each alert's headline and pull request title to bb's Push notifications plugin, which forwards them to registered phones through its push relay; turn desktop notifications off to keep them on the server.
 
 ## Requirements
 
 - A GitHub account. By default the plugin uses the [GitHub CLI](https://cli.github.com) login on the machine running bb (`gh auth login`), so each user sees their own pull requests.
 - Or a personal access token in the plugin settings: `repo` scope for a classic token, or Pull requests read and write plus Checks read for a fine-grained one. Write access is used only when you click to comment, reply, review, close or reopen. For organizations that enforce SAML SSO, authorize the token for them, or their pull requests will be missing.
-- Alerts run only while the bb server runs; desktop banners appear only while a bb window is open.
+- Alerts run only while the bb server runs. Desktop notifications need bb's Push notifications plugin enabled; its desktop and web banners appear while a bb window is open, and registered phones get them regardless.
 - github.com only; GitHub Enterprise Server is not supported yet.
