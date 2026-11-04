@@ -27,7 +27,8 @@ login (`gh auth login`) or a token; see [Requirements](#requirements).
   or waiting on a review. A coloured stripe shows the worst one at a glance.
 - **Fix it from bb.** Read the failing checks, walk the changed files with review
   threads under their lines, reply, comment on a line or a range, submit a review,
-  and close or reopen the pull request.
+  and close or reopen the pull request. Or hand a review comment or a failed job to
+  an agent with **Fix with agent**.
 - **Find anything in a long queue.** Search, hide repositories, fold groups, and
   reach your whole Merged and Closed history.
 - **Move by keyboard.** From the list to a pull request, between its files and
@@ -67,6 +68,21 @@ as the headline. **Previous** and **Next** step through the list as you left it.
 - **Conversation**: the description, comments and reviews in order, as Markdown,
   with a box for your own comment.
 - **Close** an open pull request (with a confirm step) or **reopen** a closed one.
+
+### Fix with agent
+
+Every unresolved review thread (in Comments and under its line in Files) and every
+failed job in Checks has a **Fix with agent** button. It writes a prompt with the pull
+request's link, repository and branch, then either the file, line or range, the comment
+with every reply and who wrote each, or the job's name, its error annotations and its
+log link.
+
+- If a bb thread is working on the pull request's branch in its repository, the prompt
+  goes to that thread (queued if it is busy) and a toast links to it. The newest such
+  thread wins. bb's GitHub PR Status confirms the environment's pull request when it
+  knows it; otherwise the project's git remote has to match the repository.
+- Otherwise bb's New thread screen opens with the prompt filled in, in the project whose
+  git remote is the repository when there is one, so you choose where it runs.
 
 <!-- Screenshot: a PR on its failing check (drag checks.png here) -->
 
@@ -137,9 +153,10 @@ list does not mute its alerts.
 Requests go to GitHub only for what you open, all from the bb server: one GraphQL
 request for the tab you open (with every tab's count), one for a pull request, one
 REST request when you open its Files tab, the Merged or Closed history only when you
-search or filter it, and one per alert check. Alerts and their state stay in this
-plugin's storage on your bb server. The page loads 76 KB of script and 116 KB of CSS
-(23 KB and 9 KB gzipped); an install takes about 11 MB on disk.
+search or filter it, and one per alert check. **Fix with agent** asks bb, not GitHub, which thread is on the
+branch (bb's GitHub PR Status may check with GitHub). Alerts and their state stay in this
+plugin's storage on your bb server. The page loads 79 KB of script and 116 KB of CSS
+(24 KB and 9 KB gzipped); an install takes about 11 MB on disk.
 
 ## Develop
 
@@ -156,8 +173,9 @@ bb plugin rpc call bb-github-pr-dashboard pr_detail --input-file in.json
 
 - `server.ts`: the `prs_list`, `prs_history`, `pr_detail` and `pr_files` RPCs; the
   writes `pr_reply`, `pr_comment`, `pr_line_comment`, `pr_submit_review`,
-  `pr_discard_review` and `pr_set_state`, each sent only on an explicit click; the
-  `watch` background service; and the `alerts_*` RPCs. Gets a token from the `token`
+  `pr_discard_review` and `pr_set_state`, each sent only on an explicit click;
+  `pr_agent_target`, which finds the bb thread on a pull request's branch for Fix with
+  agent; the `watch` background service; and the `alerts_*` RPCs. Gets a token from the `token`
   setting, else from `gh auth token`.
 - `queries.ts`: the GraphQL text (server only). `prs.ts`: the pure mapping to rows,
   blockers, checks, threads and the timeline. `prs.test.ts`: its tests and the alert

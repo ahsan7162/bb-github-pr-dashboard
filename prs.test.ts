@@ -1,7 +1,7 @@
 // Run: node --test prs.test.ts   (Node 22.18+ strips the types itself)
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { canSubmitReview, checkOf, matchesSearch, commentRange, commentTarget, fullPatch, rangeFromSelection, diffWatch, latestChecks, parsePatch, reviewEvents, stackOf, threadStatus, toDetail, toFiles, toList, toPr, toWatched, type RawDetail, type RawPr, type RawWatchPr, type Watched } from "./prs.ts";
+import { agentTarget, canSubmitReview, checkOf, fixPrompt, repoOfRemote, matchesSearch, commentRange, commentTarget, fullPatch, rangeFromSelection, diffWatch, latestChecks, parsePatch, reviewEvents, stackOf, threadStatus, toDetail, toFiles, toList, toPr, toWatched, type AgentThread, type RawDetail, type RawPr, type RawWatchPr, type Thread, type Watched } from "./prs.ts";
 
 const base: RawPr = {
   id: "PR_1",
@@ -347,4 +347,65 @@ test("search matches every word across title, number, repo, author and blockers"
   assert.equal(matchesSearch(pr, "failing fix"), true);
   assert.equal(matchesSearch(pr, "fix #8"), false);
   assert.equal(matchesSearch(pr, "sam"), false);
+});
+
+const fixPr = { url: "https://github.com/o/r/pull/7", repo: "o/r", headRefName: "feat/x" };
+
+test("fix prompt for a review thread: where, who, every reply, and a fence the bot's code block cannot close", () => {
+  const thread: Thread = {
+    id: "T1", path: "deploy/service.yaml", side: "LEFT", startLine: 98, line: 100, isPending: false,
+    isResolved: false, isOutdated: false, resolvedBy: null, diffHunk: null, awaitingReply: true,
+    comments: [
+      { author: "review-helper[bot]", avatarUrl: null, body: "Use a list:\n```yaml\na: [1]\n```", createdAt: "", url: "https://github.com/o/r/pull/7#c1" },
+      { author: "me", avatarUrl: null, body: "Why?", createdAt: "", url: "https://github.com/o/r/pull/7#c2" },
+    ],
+  };
+  const prompt = fixPrompt(fixPr, { kind: "thread", thread });
+  assert.match(prompt, /^Pull request https:\/\/github\.com\/o\/r\/pull\/7 \(o\/r, branch `feat\/x`\)\./);
+  assert.match(prompt, /In `deploy\/service\.yaml` at lines 98–100 \(a line of the old version\) — review comment from @review-helper\[bot\] \(https:\/\/github\.com\/o\/r\/pull\/7#c1\):\n````\nUse a list:\n```yaml\na: \[1\]\n```\n````/);
+  assert.match(prompt, /Reply from @me:\n```\nWhy\?\n```/);
+});
+
+test("fix prompt for a failed job: its pipeline, errors and logs", () => {
+  const prompt = fixPrompt(fixPr, {
+    kind: "check",
+    check: {
+      name: "test", workflow: "CI", status: "failing", conclusion: "TIMED_OUT", url: "https://ci/1", title: null, summary: "ignored",
+      annotations: [{ path: "a.ts", line: 3, level: "FAILURE", message: "boom" }],
+    },
+  });
+  assert.match(prompt, /The CI job "CI \/ test" failed \(timed out\)\./);
+  assert.match(prompt, /Errors from the run:\n```\na\.ts:3 FAILURE: boom\n```/);
+  assert.match(prompt, /Logs: https:\/\/ci\/1/);
+  assert.doesNotMatch(prompt, /ignored/);
+});
+
+test("repo of a git remote, https or ssh, any case", () => {
+  assert.equal(repoOfRemote("https://github.com/Acme/Payments-Live.git"), "acme/payments-live");
+  assert.equal(repoOfRemote("git@github.com:o/r.js.git"), "o/r.js");
+  assert.equal(repoOfRemote("https://gitlab.com/o/r.git"), null);
+  assert.equal(repoOfRemote(null), null);
+});
+
+test("the PR's thread is on its branch in its repo; bb's PR status for the environment overrides the remote", () => {
+  const t = (id: string, projectId: string, over: Partial<AgentThread> = {}): AgentThread => ({
+    id, projectId, environmentId: `env_${id}`, environmentBranchName: "feat/x", archivedAt: null, updatedAt: 1, title: id, titleFallback: null, ...over,
+  });
+  const projects = [
+    { id: "p_r", gitRemoteUrl: "git@github.com:o/r.git" },
+    { id: "p_other", gitRemoteUrl: "https://github.com/o/other.git" },
+    { id: "p_folder", gitRemoteUrl: null },
+  ];
+  // Same branch name in another repo, and an archived thread: neither is the PR's.
+  assert.deepEqual(agentTarget(fixPr, [t("a", "p_other"), t("b", "p_r", { archivedAt: 5 })], projects, {}), { thread: null, projectId: "p_r" });
+  // By remote, the newest wins.
+  assert.equal(agentTarget(fixPr, [t("old", "p_r"), t("new", "p_r", { updatedAt: 9 })], projects, {}).thread?.id, "new");
+  // PR status confirms a thread whose project has no remote, and rejects one whose branch has another PR.
+  const target = agentTarget(
+    fixPr,
+    [t("folder", "p_folder"), t("stale", "p_r", { updatedAt: 9 })],
+    projects,
+    { env_folder: "https://github.com/O/R/pull/7", env_stale: "https://github.com/o/r/pull/6" },
+  );
+  assert.deepEqual(target.thread, { id: "folder", title: "folder" });
 });

@@ -14,6 +14,7 @@ A **My PRs** page in the bb navigation rail for every pull request you are part 
 - **Checks** by pipeline and job, failing first, with error annotations and log links.
 - **Files**: a file list beside the diff, syntax highlighting inline or side by side, and review threads under their lines. Press + or select line numbers (Shift-click or drag for a range) to comment. Start a private review or post a single comment, then finish as Comment, Approve or Request changes, or discard it. j and k move between files, n and p between unresolved comments.
 - **Comments**: unresolved first, each with its diff, every reply, who it waits on, and Show in diff. Reply right there.
+- **Fix with agent** on every unresolved review thread and failed job: a prompt with the pull request, its branch, and the comment with its replies or the job with its errors and log link. It goes to the bb thread already on the pull request's branch, with a toast linking to it; otherwise bb's New thread screen opens with it filled in, in the project for that repository, so you choose where it runs.
 - **Conversation**: the description, comments and reviews in order, as Markdown, with a box for your own comment.
 - Close an open pull request (with a confirm step) or reopen a closed one.
 
