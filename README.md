@@ -1,3 +1,4 @@
+
 # GitHub PR Dashboard for bb
 
 See why each pull request is stuck, and get it unstuck, without leaving [bb](https://getbb.app).
@@ -42,7 +43,7 @@ login (`gh auth login`) or a token; see [Requirements](#requirements).
   in My PRs, or on GitHub if My PRs cannot load it. Cmd/Ctrl-click and "Open on
   GitHub" links still go to GitHub.
 
-<!-- Screenshot: the list (drag list.png here in GitHub's web editor) -->
+<img width="2560" height="1720" alt="list" src="https://github.com/user-attachments/assets/31c3a539-9bb1-4e09-b641-3ea2aa8b9f7b" />
 
 ## The list
 
@@ -59,7 +60,7 @@ login (`gh auth login`) or a token; see [Requirements](#requirements).
   ready to merge) and a "New since you last looked" list of alerts.
 - Coming back from a pull request returns you to where you were in the list.
 
-<!-- Screenshot: the repo filter (drag filters.png here) -->
+<img width="2560" height="1720" alt="filters" src="https://github.com/user-attachments/assets/ff92da4d-2440-443e-ac2b-cf756dfb93e1" />
 
 ## A pull request
 
@@ -76,6 +77,8 @@ as the headline. **Previous** and **Next** step through the list as you left it.
   with a box for your own comment.
 - **Close** an open pull request (with a confirm step) or **reopen** a closed one.
 
+<img width="2560" height="1720" alt="checks" src="https://github.com/user-attachments/assets/dff59c2c-53ee-4fa4-bd0d-055b29818324" />
+
 ### Fix with agent
 
 Every unresolved review thread (in Comments and under its line in Files) and every
@@ -91,8 +94,6 @@ log link.
 - Otherwise bb's New thread screen opens with the prompt filled in, in the project whose
   git remote is the repository when there is one, so you choose where it runs.
 
-<!-- Screenshot: a PR on its failing check (drag checks.png here) -->
-
 ### Reviewing
 
 Press **+** on a line, or select line numbers (Shift-click or drag for a range), to
@@ -100,7 +101,8 @@ comment. Post a single comment, or start a review that only you can see until yo
 finish it as **Comment**, **Approve** or **Request changes**, or discard it. Reply to
 any thread where it is. Nothing is written to GitHub until you click.
 
-<!-- Screenshot: files and threads (drag files.png here), then finishing a review (review.png) -->
+<img width="2560" height="1720" alt="review" src="https://github.com/user-attachments/assets/6d004fa5-5794-4d52-8ba8-b577239a86fb" />
+
 
 ## Keyboard
 
