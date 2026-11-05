@@ -19,8 +19,11 @@ login (`gh auth login`) or a token; see [Requirements](#requirements).
 ## What you get
 
 - **Every pull request you are part of, in one tab.** A **My PRs** page in the bb
-  rail with **Open**, **Review requested** (you or your teams), **Assigned**,
-  **Merged** and **Closed**, grouped by repository, newest first.
+  rail with **Open**, **Review requested** (you or your teams), **Reviewed**,
+  **Assigned**, **Merged** and **Closed**, grouped by repository, newest first.
+- **Know when a review needs redoing.** **Reviewed** keeps the open pull requests you
+  reviewed with your verdict, and turns amber when the author pushes after your
+  review or it was dismissed.
 - **Why each one is not merged yet.** Every open pull request leads with its
   blockers: draft, stacked on another pull request, merge conflicts, failing CI
   with the failing jobs named, CI running, changes requested, unresolved comments,

@@ -41,6 +41,8 @@ export interface Pr {
   conflicts: boolean;
   /** Why an open PR is not merged yet; empty means nothing is blocking it. */
   blockers: string[];
+  /** Your latest review (Reviewed tab only); stale once the author pushed after it or it was dismissed. */
+  myReview: { state: string; stale: boolean } | null;
 }
 
 export interface PrList {
@@ -93,6 +95,8 @@ export interface RawPr {
   baseRef?: { associatedPullRequests: { nodes: StackRef[] } } | null;
   reviewDecision?: string | null;
   mergeable?: string;
+  headRefOid?: string;
+  viewerLatestReview?: { state: string; commit?: { oid: string } | null } | null;
   reviewThreads?: { nodes: { isResolved: boolean; comments?: { nodes: { state?: string }[] } }[] };
   commits?: {
     nodes: {
@@ -170,6 +174,14 @@ export function toPr(raw: RawPr): Pr {
     // UNKNOWN means GitHub has not computed it yet; only CONFLICTING is a conflict.
     conflicts: raw.mergeable === "CONFLICTING",
     blockers: [],
+    myReview: raw.viewerLatestReview
+      ? {
+          state: raw.viewerLatestReview.state,
+          stale:
+            raw.viewerLatestReview.state === "DISMISSED" ||
+            (!!raw.headRefOid && raw.viewerLatestReview.commit?.oid !== raw.headRefOid),
+        }
+      : null,
   };
   pr.blockers = blockersOf(pr);
   return pr;

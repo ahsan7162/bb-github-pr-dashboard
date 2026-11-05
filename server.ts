@@ -75,6 +75,7 @@ const prSchema = z.object({
   reviewDecision: z.string().nullable(),
   conflicts: z.boolean(),
   blockers: z.array(z.string()),
+  myReview: z.object({ state: z.string(), stale: z.boolean() }).nullable(),
 });
 const listSchema = z.object({ total: z.number(), items: z.array(prSchema) });
 
@@ -169,10 +170,17 @@ const commentBody = z.string().trim().min(1, "Write something first").max(65_000
 
 export const rpcContract = defineRpcContract({
   prs_list: {
-    input: z.object({ tab: z.enum(["open", "review", "assigned", "merged", "closed"]) }).strict(),
+    input: z.object({ tab: z.enum(["open", "review", "reviewed", "assigned", "merged", "closed"]) }).strict(),
     output: z.object({
       list: listSchema,
-      counts: z.object({ open: z.number(), review: z.number(), assigned: z.number(), merged: z.number(), closed: z.number() }),
+      counts: z.object({
+        open: z.number(),
+        review: z.number(),
+        reviewed: z.number(),
+        assigned: z.number(),
+        merged: z.number(),
+        closed: z.number(),
+      }),
       fetchedAt: z.string(),
     }),
   },
@@ -494,7 +502,14 @@ export default async function plugin(bb: BbPluginApi) {
       const count = (t: (typeof LIST_TABS)[number]) => data[t].issueCount;
       return {
         list: toList(data[tab]),
-        counts: { open: count("open"), review: count("review"), assigned: count("assigned"), merged: count("merged"), closed: count("closed") },
+        counts: {
+          open: count("open"),
+          review: count("review"),
+          reviewed: count("reviewed"),
+          assigned: count("assigned"),
+          merged: count("merged"),
+          closed: count("closed"),
+        },
         fetchedAt: new Date().toISOString(),
       };
     },

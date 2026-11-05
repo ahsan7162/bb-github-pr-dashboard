@@ -433,3 +433,13 @@ test("the PR's thread is on its branch in its repo; bb's PR status for the envir
   );
   assert.deepEqual(target.thread, { id: "folder", title: "folder" });
 });
+
+test("a review goes stale when the author pushes after it or it is dismissed", () => {
+  const reviewed = (state: string, reviewedOid: string, headRefOid = "abc") =>
+    toPr({ ...base, headRefOid, viewerLatestReview: { state, commit: { oid: reviewedOid } } }).myReview;
+  assert.deepEqual(reviewed("APPROVED", "abc"), { state: "APPROVED", stale: false });
+  assert.deepEqual(reviewed("APPROVED", "old"), { state: "APPROVED", stale: true });
+  assert.deepEqual(reviewed("CHANGES_REQUESTED", "old"), { state: "CHANGES_REQUESTED", stale: true });
+  assert.deepEqual(reviewed("DISMISSED", "abc"), { state: "DISMISSED", stale: true });
+  assert.equal(toPr(base).myReview, null);
+});

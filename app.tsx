@@ -27,11 +27,12 @@ import { Input } from "@/components/ui/input";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
-type Tab = "open" | "review" | "assigned" | "merged" | "closed";
+type Tab = "open" | "review" | "reviewed" | "assigned" | "merged" | "closed";
 
 const EMPTY: Record<Tab, string> = {
   open: "You have no open pull requests.",
   review: "No reviews are waiting on you or your teams.",
+  reviewed: "No open pull requests you reviewed.",
   assigned: "No open pull requests are assigned to you.",
   merged: "No merged pull requests yet.",
   closed: "No closed pull requests.",
@@ -175,8 +176,26 @@ function rowTone(pr: Pr, isOpen: boolean): Tone {
   const state = prState(pr);
   if (!isOpen) return state.label === "Merged" ? "merged" : "neutral";
   if (pr.ci === "failing" || pr.blockers.some((b) => blockerTone(b) === "bad")) return "bad";
-  if (pr.ci === "pending" || pr.blockers.some((b) => blockerTone(b) === "warn")) return "warn";
+  if (pr.myReview?.stale || pr.ci === "pending" || pr.blockers.some((b) => blockerTone(b) === "warn")) return "warn";
   return pr.blockers.length === 0 ? "good" : "neutral";
+}
+
+const VERDICT: Record<string, { done: string; since: string }> = {
+  APPROVED: { done: "You approved", since: "New commits since you approved" },
+  CHANGES_REQUESTED: { done: "You requested changes", since: "New commits since you requested changes" },
+  COMMENTED: { done: "You commented", since: "New commits since your review" },
+  DISMISSED: { done: "Your review was dismissed", since: "Your review was dismissed" },
+};
+
+/** Your latest review on a Reviewed row: amber when it went stale and wants another look. */
+function Verdict({ review }: { review: NonNullable<Pr["myReview"]> }) {
+  const words = VERDICT[review.state] ?? { done: "You reviewed", since: "New commits since your review" };
+  if (review.stale) return <Pill tone="warn" icon="RotateCcw">{words.since}</Pill>;
+  return (
+    <Pill tone={review.state === "APPROVED" ? "good" : "neutral"} icon={review.state === "APPROVED" ? "CircleCheck" : "MessageSquare"}>
+      {words.done}
+    </Pill>
+  );
 }
 
 function PrRow({ pr, onOpen, showAuthor }: { pr: Pr; onOpen: () => void; showAuthor: boolean }) {
@@ -206,6 +225,7 @@ function PrRow({ pr, onOpen, showAuthor }: { pr: Pr; onOpen: () => void; showAut
           </span>
           {isOpen ? (
             <span className="flex flex-wrap gap-2">
+              {pr.myReview ? <Verdict review={pr.myReview} /> : null}
               {blocking ? (
                 <Pill tone={blocking.tone} icon={blocking.icon}>
                   {blocking.label}
@@ -465,6 +485,14 @@ function ListView({
               count: counts?.review,
               countTone: counts && counts.review > 0 ? "warn" : "neutral",
             },
+            {
+              id: "reviewed",
+              label: "Reviewed",
+              icon: "CircleCheck",
+              count: counts?.reviewed,
+              // Amber when a PR you reviewed changed since: it wants another look.
+              countTone: lists.reviewed?.items.some((p) => p.myReview?.stale) ? "warn" : "neutral",
+            },
             { id: "assigned", label: "Assigned", icon: "UserRound", count: counts?.assigned },
             { id: "merged", label: "Merged", icon: "GitMerge", count: counts?.merged },
             { id: "closed", label: "Closed", icon: "GitPullRequestClosed", count: counts?.closed },
@@ -628,7 +656,7 @@ function ListView({
                           key={pr.id}
                           pr={pr}
                           onOpen={() => onOpen(pr)}
-                          showAuthor={tab === "review" || tab === "assigned"}
+                          showAuthor={tab === "review" || tab === "reviewed" || tab === "assigned"}
                         />
                       ))}
                     </RepoRows>

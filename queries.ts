@@ -28,11 +28,17 @@ const OPEN_DETAILS = `
 const MINE = "is:pr author:@me archived:false sort:updated-desc";
 const OPEN_PRS = "is:pr is:open archived:false sort:updated-desc";
 
-export type ListTab = "open" | "review" | "assigned" | "merged" | "closed";
+export type ListTab = "open" | "review" | "reviewed" | "assigned" | "merged" | "closed";
 
 const TABS: Record<ListTab, { q: string; first: number; fields: string }> = {
   open: { q: `${MINE} is:open`, first: 50, fields: `${BASE} ${OPEN_DETAILS}` },
   review: { q: `${OPEN_PRS} review-requested:@me`, first: 50, fields: `${BASE} ${OPEN_DETAILS}` },
+  // Reviewed by you and not asked again (a re-request lands in review); the head commit tells if your review went stale.
+  reviewed: {
+    q: `${OPEN_PRS} reviewed-by:@me -author:@me -review-requested:@me`,
+    first: 50,
+    fields: `${BASE} ${OPEN_DETAILS} headRefOid viewerLatestReview { state commit { oid } }`,
+  },
   assigned: { q: `${OPEN_PRS} assignee:@me`, first: 50, fields: `${BASE} ${OPEN_DETAILS}` },
   merged: { q: `${MINE} is:merged`, first: 30, fields: BASE },
   closed: { q: `${MINE} is:closed is:unmerged`, first: 30, fields: BASE },
