@@ -4,7 +4,7 @@ const CHECK_RUN = `name status conclusion detailsUrl startedAt
   checkSuite { app { name } workflowRun { workflow { name } } }`;
 
 const BASE = `
-  id number title url isDraft createdAt updatedAt mergedAt closedAt
+  id number title url isDraft createdAt updatedAt mergedAt closedAt additions deletions
   author { login } baseRefName
   repository { nameWithOwner defaultBranchRef { name } }`;
 
@@ -63,14 +63,14 @@ export const HISTORY_QUERY = `query($q: String!, $after: String) {
 }`;
 export const historyQuery = (state: "merged" | "closed") => TABS[state].q;
 
-const COMMENT = "author { login avatarUrl(size: 64) } body createdAt url";
+const COMMENT = "id viewerCanDelete author { login avatarUrl(size: 64) } body createdAt url";
 
 // shortcut: first 100 threads, 50 comments per thread, last 100 comments and
 // 50 reviews; paginate if a PR ever outgrows that.
 export const PR_DETAIL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   viewer { login }
   repository(owner: $owner, name: $name) { pullRequest(number: $number) {
-    id number title url isDraft state createdAt body changedFiles additions deletions
+    id number title url isDraft state createdAt body changedFiles additions deletions viewerCanUpdate
     author { login avatarUrl(size: 64) } headRefName baseRefName reviewDecision mergeable
     repository { nameWithOwner defaultBranchRef { name } } ${STACK}
     reviewThreads(first: 100) { nodes {
@@ -78,6 +78,17 @@ export const PR_DETAIL_QUERY = `query($owner: String!, $name: String!, $number: 
       comments(first: 50) { nodes { ${COMMENT} diffHunk state } }
     } }
     pendingReview: reviews(states: PENDING, first: 1) { nodes { id } }
+    viewerLatestReview { commit { oid } }
+    labels(first: 20) { nodes { name color } }
+    latestReviews(first: 30) { nodes { author { login avatarUrl(size: 64) } state } }
+    reviewRequests(first: 20) { nodes { requestedReviewer {
+      __typename ... on User { login avatarUrl(size: 64) } ... on Bot { login avatarUrl(size: 64) }
+      ... on Team { name avatarUrl(size: 64) } ... on Mannequin { login avatarUrl(size: 64) }
+    } } }
+    history: commits(last: 100) { totalCount nodes { commit {
+      oid abbreviatedOid messageHeadline committedDate statusCheckRollup { state }
+      author { name avatarUrl(size: 64) user { login } }
+    } } }
     comments(last: 100) { nodes { ${COMMENT} } }
     reviews(last: 50) { nodes { author { login avatarUrl(size: 64) } state body submittedAt url } }
     commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
@@ -161,4 +172,26 @@ export const CLOSE_PR_MUTATION = `mutation($prId: ID!) {
 
 export const REOPEN_PR_MUTATION = `mutation($prId: ID!) {
   reopenPullRequest(input: { pullRequestId: $prId }) { pullRequest { state } }
+}`;
+
+export const READY_PR_MUTATION = `mutation($prId: ID!) {
+  markPullRequestReadyForReview(input: { pullRequestId: $prId }) { pullRequest { state } }
+}`;
+
+export const DRAFT_PR_MUTATION = `mutation($prId: ID!) {
+  convertPullRequestToDraft(input: { pullRequestId: $prId }) { pullRequest { state } }
+}`;
+
+// Only the field being edited is sent, so saving one never overwrites the other.
+export const updatePrMutation = (field: "title" | "body") => `mutation($prId: ID!, $${field}: String!) {
+  updatePullRequest(input: { pullRequestId: $prId, ${field}: $${field} }) { pullRequest { title } }
+}`;
+
+// Issue comments (Overview) and review comments (threads) are deleted by different mutations.
+export const DELETE_ISSUE_COMMENT_MUTATION = `mutation($id: ID!) {
+  deleteIssueComment(input: { id: $id }) { clientMutationId }
+}`;
+
+export const DELETE_REVIEW_COMMENT_MUTATION = `mutation($id: ID!) {
+  deletePullRequestReviewComment(input: { id: $id }) { clientMutationId }
 }`;

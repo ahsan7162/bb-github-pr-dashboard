@@ -17,6 +17,7 @@ import {
 import { z } from "zod";
 import {
   agentTarget,
+  linkCandidates,
   canSubmitReview,
   ALERTS_NEW,
   ALERTS_SEEN,
@@ -36,7 +37,12 @@ import {
 import {
   CLOSE_PR_MUTATION,
   COMMENT_MUTATION,
+  DRAFT_PR_MUTATION,
+  DELETE_ISSUE_COMMENT_MUTATION,
+  DELETE_REVIEW_COMMENT_MUTATION,
+  READY_PR_MUTATION,
   REOPEN_PR_MUTATION,
+  updatePrMutation,
   REVIEW_DISCARD_MUTATION,
   reviewAddThreadMutation,
   reviewStartMutation,
@@ -76,10 +82,14 @@ const prSchema = z.object({
   conflicts: z.boolean(),
   blockers: z.array(z.string()),
   myReview: z.object({ state: z.string(), stale: z.boolean() }).nullable(),
+  additions: z.number(),
+  deletions: z.number(),
 });
 const listSchema = z.object({ total: z.number(), items: z.array(prSchema) });
 
 const commentSchema = z.object({
+  id: z.string(),
+  canDelete: z.boolean(),
   author: z.string(),
   avatarUrl: z.string().nullable(),
   body: z.string(),
@@ -108,6 +118,23 @@ const detailSchema = z.object({
   reviewDecision: z.string().nullable(),
   conflicts: z.boolean(),
   timeline: z.array(commentSchema.extend({ reviewState: z.string().nullable() })),
+  commits: z.array(
+    z.object({
+      oid: z.string(),
+      shortOid: z.string(),
+      headline: z.string(),
+      author: z.string(),
+      avatarUrl: z.string().nullable(),
+      committedDate: z.string(),
+      ci: z.enum(["failing", "pending", "passing", "skipped"]).nullable(),
+    }),
+  ),
+  commitCount: z.number(),
+  reviewers: z.array(z.object({ name: z.string(), avatarUrl: z.string().nullable(), team: z.boolean(), state: z.string() })),
+  labels: z.array(z.object({ name: z.string(), color: z.string().nullable() })),
+  body: z.string(),
+  canEdit: z.boolean(),
+  myReviewOid: z.string().nullable(),
   threads: z.array(
     z.object({
       id: z.string(),
@@ -165,10 +192,30 @@ const prRef = z
   })
   .strict();
 // GitHub GraphQL node ids are short base64-ish strings.
+const loginSchema = z.string().regex(/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/, "Expected a GitHub login");
 const nodeId = z.string().regex(/^[A-Za-z0-9_=-]{1,100}$/, "Expected a GitHub node id");
 const commentBody = z.string().trim().min(1, "Write something first").max(65_000, "GitHub comments are limited to about 65,000 characters");
 
 export const rpcContract = defineRpcContract({
+  /** Read-only: whether bb's My Jira plugin runs here (Jira keys then open in it), and its Jira site. */
+  jira_link: {
+    input: z.object({}).strict(),
+    output: z.object({ plugin: z.boolean(), siteUrl: z.string().nullable() }),
+  },
+  /** Read-only, local: the gh accounts this plugin can use, and the one it uses. No GitHub request beyond gh's own check. */
+  accounts: {
+    input: z.object({}).strict(),
+    output: z.object({
+      accounts: z.array(z.object({ login: z.string(), ghActive: z.boolean() })),
+      selected: z.string().nullable(),
+      usingToken: z.boolean(),
+    }),
+  },
+  /** Which gh account this plugin reads and writes as; gh's own active account is left alone. */
+  account_select: {
+    input: z.object({ login: loginSchema }).strict(),
+    output: z.object({ selected: z.string() }),
+  },
   prs_list: {
     input: z.object({ tab: z.enum(["open", "review", "reviewed", "assigned", "merged", "closed"]) }).strict(),
     output: z.object({
@@ -208,6 +255,10 @@ export const rpcContract = defineRpcContract({
     input: z.object({ threadId: nodeId, body: commentBody }).strict(),
     output: z.object({ url: z.string(), pending: z.boolean() }),
   },
+  pr_delete_comment: {
+    input: z.object({ id: nodeId, kind: z.enum(["issue", "review"]) }).strict(),
+    output: z.object({ ok: z.literal(true) }),
+  },
   pr_comment: {
     input: z.object({ subjectId: nodeId, body: commentBody }).strict(),
     output: z.object({ url: z.string() }),
@@ -246,8 +297,19 @@ export const rpcContract = defineRpcContract({
       .strict(),
     output: z.object({ url: z.string(), state: z.string() }),
   },
+  pr_edit: {
+    input: z
+      .object({
+        prId: nodeId,
+        title: z.string().trim().min(1, "A title is required").max(256, "GitHub titles are limited to 256 characters").optional(),
+        body: z.string().max(65_000, "GitHub descriptions are limited to about 65,000 characters").optional(),
+      })
+      .strict()
+      .refine((v) => (v.title === undefined) !== (v.body === undefined), "Edit either the title or the description"),
+    output: z.object({ title: z.string() }),
+  },
   pr_set_state: {
-    input: z.object({ prId: nodeId, action: z.enum(["close", "reopen"]) }).strict(),
+    input: z.object({ prId: nodeId, action: z.enum(["close", "reopen", "ready", "draft"]) }).strict(),
     output: z.object({ state: z.string() }),
   },
   /** Read-only: which bb thread works on this PR's branch, else which project a new thread should start in. */
@@ -262,6 +324,7 @@ export const rpcContract = defineRpcContract({
     output: z.object({
       thread: z.object({ id: z.string(), title: z.string() }).nullable(),
       projectId: z.string().nullable(),
+      threads: z.array(z.object({ id: z.string(), title: z.string(), project: z.string(), updatedAt: z.number() })),
     }),
   },
   alerts_list: { input: z.null(), output: alertsSchema },
@@ -296,27 +359,49 @@ const GH_MISSING =
 const GH_LOGGED_OUT =
   "GitHub CLI is not logged in. Run `gh auth login` (or `gh auth refresh -h github.com`), or set a GitHub token in this plugin's settings.";
 
-function ghToken(): Promise<string> {
-  return new Promise((resolve, reject) => {
+function gh(args: string[]): Promise<{ stdout: string; error: NodeJS.ErrnoException | null }> {
+  return new Promise((resolve) => {
     execFile(
       "gh",
-      ["auth", "token", "--hostname", "github.com"],
+      args,
       {
-        timeout: 10_000,
+        timeout: 15_000,
         // bb.app launched from the Dock may not have Homebrew on PATH.
         env: { ...process.env, PATH: `${process.env.PATH ?? ""}:/opt/homebrew/bin:/usr/local/bin` },
       },
-      (error, stdout) => {
-        const token = stdout.trim();
-        if (error === null && token !== "") return resolve(token);
-        const missing = (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
-        reject(new experimental_PluginRpcRefusal({
-          code: "forbidden",
-          message: missing ? GH_MISSING : GH_LOGGED_OUT,
-        }));
-      },
+      (error, stdout) => resolve({ stdout: String(stdout), error: error as NodeJS.ErrnoException | null }),
     );
   });
+}
+
+/** The token of one gh account, or of gh's active account when `user` is empty. gh's active account is never changed. */
+async function ghToken(user: string): Promise<string> {
+  const { stdout, error } = await gh(["auth", "token", "--hostname", "github.com", ...(user ? ["--user", user] : [])]);
+  const token = stdout.trim();
+  if (error === null && token !== "") return token;
+  throw new experimental_PluginRpcRefusal({
+    code: "forbidden",
+    message:
+      error?.code === "ENOENT"
+        ? GH_MISSING
+        : user
+          ? `GitHub CLI has no login for ${user} any more. Pick another account on My PRs, or run \`gh auth login\`.`
+          : GH_LOGGED_OUT,
+  });
+}
+
+/** github.com accounts logged in to gh, and which one gh itself uses. */
+async function ghAccounts(): Promise<{ login: string; active: boolean }[]> {
+  // gh exits non-zero when any account's token is invalid, but still prints the JSON.
+  const { stdout } = await gh(["auth", "status", "--hostname", "github.com", "--json", "hosts"]);
+  try {
+    const hosts = JSON.parse(stdout) as { hosts?: Record<string, { login?: string; active?: boolean }[]> };
+    return (hosts.hosts?.["github.com"] ?? [])
+      .filter((a): a is { login: string; active?: boolean } => typeof a.login === "string")
+      .map((a) => ({ login: a.login, active: a.active === true }));
+  } catch {
+    return [];
+  }
 }
 
 interface GraphqlResponse<T> {
@@ -378,7 +463,7 @@ export default async function plugin(bb: BbPluginApi) {
   async function auth(): Promise<{ token: string; fromSetting: boolean }> {
     const configured = (await settings.get()).token;
     const fromSetting = typeof configured === "string" && configured.trim() !== "";
-    return { token: fromSetting ? configured.trim() : await ghToken(), fromSetting };
+    return { token: fromSetting ? configured.trim() : await ghToken((await bb.storage.kv.get<string>("account")) ?? ""), fromSetting };
   }
 
   /** Every GitHub call, REST or GraphQL, goes through here so auth and errors stay in one place. */
@@ -556,6 +641,43 @@ export default async function plugin(bb: BbPluginApi) {
       // With an unsubmitted review open, the reply joins it and stays hidden until submitted.
       return { url: comment.url, pending: comment.state === "PENDING" };
     },
+    jira_link: async () => {
+      try {
+        const status = await bb.sdk.plugins.callRpc({
+          pluginId: "my-jira",
+          method: "auth_status",
+          input: null,
+          outputSchema: z.object({ site: z.object({ url: z.string() }).nullable() }).passthrough(),
+        });
+        return { plugin: true, siteUrl: status.site?.url ?? null };
+      } catch {
+        return { plugin: false, siteUrl: null }; // not installed or not running: links go to the Jira site
+      }
+    },
+    accounts: async () => {
+      const [accounts, chosen, { token }] = await Promise.all([
+        ghAccounts(),
+        bb.storage.kv.get<string>("account"),
+        settings.get(),
+      ]);
+      const usingToken = typeof token === "string" && token.trim() !== "";
+      const selected = accounts.find((a) => a.login === chosen)?.login ?? accounts.find((a) => a.active)?.login ?? null;
+      return { accounts: accounts.map((a) => ({ login: a.login, ghActive: a.active })), selected, usingToken };
+    },
+    account_select: async ({ login }) => {
+      const accounts = await ghAccounts();
+      if (!accounts.some((a) => a.login === login)) {
+        throw new experimental_PluginRpcRefusal({ code: "invalid", message: `GitHub CLI is not logged in as ${login}.` });
+      }
+      // gh's active account is the default: remembering it would stop following later gh switches.
+      if (accounts.find((a) => a.active)?.login === login) await bb.storage.kv.delete("account");
+      else await bb.storage.kv.set("account", login);
+      return { selected: login };
+    },
+    pr_delete_comment: async ({ id, kind }) => {
+      await graphql(kind === "issue" ? DELETE_ISSUE_COMMENT_MUTATION : DELETE_REVIEW_COMMENT_MUTATION, { id }, { mutation: true });
+      return { ok: true as const };
+    },
     pr_comment: async ({ subjectId, body }) => {
       const data = await graphql<{ addComment: { commentEdge: { node: { url: string } } | null } | null }>(
         COMMENT_MUTATION,
@@ -611,14 +733,24 @@ export default async function plugin(bb: BbPluginApi) {
       if (!data.deletePullRequestReview?.pullRequestReview) throw new Error("GitHub did not discard the review");
       return { discarded: true };
     },
+    pr_edit: async ({ prId, title, body }) => {
+      const data = await graphql<{ updatePullRequest: { pullRequest: { title: string } | null } | null }>(
+        updatePrMutation(title !== undefined ? "title" : "body"),
+        title !== undefined ? { prId, title } : { prId, body },
+        { mutation: true },
+      );
+      const pr = data.updatePullRequest?.pullRequest;
+      if (!pr) throw new Error("GitHub did not update the pull request");
+      return { title: pr.title };
+    },
     pr_set_state: async ({ prId, action }) => {
       const data = await graphql<Record<string, { pullRequest: { state: string } | null } | null>>(
-        action === "close" ? CLOSE_PR_MUTATION : REOPEN_PR_MUTATION,
+        { close: CLOSE_PR_MUTATION, reopen: REOPEN_PR_MUTATION, ready: READY_PR_MUTATION, draft: DRAFT_PR_MUTATION }[action],
         { prId },
         { mutation: true },
       );
       const pr = Object.values(data)[0]?.pullRequest;
-      if (!pr) throw new Error(`GitHub did not ${action} the pull request`);
+      if (!pr) throw new Error(`GitHub did not change the pull request (${action})`);
       return { state: pr.state };
     },
     pr_agent_target: async ({ repo, number, headRefName }) => {
@@ -649,7 +781,8 @@ export default async function plugin(bb: BbPluginApi) {
           bb.log.warn(`GitHub PR Status lookup skipped: ${cause instanceof Error ? cause.message : String(cause)}`);
         }
       }
-      return agentTarget({ url: `https://github.com/${repo}/pull/${number}`, repo, headRefName }, onBranch, projects, prUrlByEnvironment);
+      const target = agentTarget({ url: `https://github.com/${repo}/pull/${number}`, repo, headRefName }, onBranch, projects, prUrlByEnvironment);
+      return { ...target, threads: linkCandidates(threads, projects, target) };
     },
     alerts_list: async () => summary(await readAlerts()),
     alerts_mark_seen: async () => {

@@ -31,7 +31,7 @@ login (`gh auth login`) or a token; see [Requirements](#requirements).
   or waiting on a review. A coloured stripe shows the worst one at a glance.
 - **Fix it from bb.** Read the failing checks, walk the changed files with review
   threads under their lines, reply, comment on a line or a range, submit a review,
-  and close or reopen the pull request. Or hand a review comment or a failed job to
+  mark it ready for review, and close or reopen it. Or hand a review comment or a failed job to
   an agent with **Fix with agent**.
 - **Find anything in a long queue.** Search, hide repositories, fold groups, and
   reach your whole Merged and Closed history.
@@ -47,8 +47,8 @@ login (`gh auth login`) or a token; see [Requirements](#requirements).
 
 ## The list
 
-- Each row shows the title, its blockers, the failing jobs, and when it was last
-  updated. A pull request with nothing blocking it says so.
+- Each row shows the title, its blockers, the failing jobs, lines added and removed,
+  and when it was last updated. A pull request with nothing blocking it says so.
 - **Search** by title, #number, repository or author. It matches every word you type.
 - **Repos** filters each tab to the repositories you pick, with Select all and
   Deselect all. Hidden repositories are remembered across restarts.
@@ -64,18 +64,24 @@ login (`gh auth login`) or a token; see [Requirements](#requirements).
 
 ## A pull request
 
-The header shows its state, branches, where it sits in a stack, and its blockers
-as the headline. **Previous** and **Next** step through the list as you left it.
+The header shows its state, its branches (click one to copy its name), lines added
+and removed, its reviewers with each one's verdict (or that a review is still
+requested), its labels, where it sits in a stack, and its blockers as the headline. A pencil
+beside the title edits it, when GitHub lets you. **Previous** and **Next** step through the list as you left it.
 
+- **Overview** (first): the description in its own panel, with a pencil to edit it,
+  then the comments and reviews in order, as Markdown, with a box for your own comment.
 - **Checks**: every check by pipeline and job, failing first, with the error
   annotations from the run and a link to the logs.
 - **Files**: a file list beside the diff, bb's syntax-highlighted diff viewer inline
   or side by side, and every review thread as a band under its line.
+- **Commits**: every commit, newest first, with its CI result and a link to it on
+  GitHub. If you reviewed before, the commits pushed since your latest review are
+  marked, so a re-review knows where to start.
 - **Comments**: unresolved threads first, each with its diff, every reply, who it
   waits on, and **Show in diff** to jump to its line.
-- **Conversation**: the description, comments and reviews in order, as Markdown,
-  with a box for your own comment.
-- **Close** an open pull request (with a confirm step) or **reopen** a closed one.
+- On your own pull request, mark a draft **Ready for review** or **Convert to draft**; **close** an open pull
+  request (with a confirm step) or **reopen** a closed one.
 
 <img width="2560" height="1720" alt="checks" src="https://github.com/user-attachments/assets/dff59c2c-53ee-4fa4-bd0d-055b29818324" />
 
@@ -94,12 +100,31 @@ log link.
 - Otherwise bb's New thread screen opens with the prompt filled in, in the project whose
   git remote is the repository when there is one, so you choose where it runs.
 
+### The ⋯ menu
+
+- **Link to thread**: pick any bb thread (the PR's branch thread and its project's threads come first) and send it
+  the pull request's link, title and branches as context.
+- **Ask a question** and **Explain this PR** open New thread with the pull request filled in.
+- **Fix findings in a thread** sends every unresolved review thread and failed job at once, the way Fix with agent
+  sends one.
+- **Open on GitHub**, **Copy link**, **Copy PR number**, and **Close pull request** (with a confirm step).
+
+New threads start in the pull request's project: the one whose git remote is the repository, else one named like it
+(`Billing API` for `acme/billing-api`), but never a guess between two.
+
+### Jira
+
+Jira issue keys in the title and Markdown (only for projects the pull request names in its title, branch or a Jira
+link, so `UTF-8` never becomes one) and Jira issue links open in bb's **My Jira** plugin when it is installed and
+running, or on your Jira site otherwise.
+
 ### Reviewing
 
 Press **+** on a line, or select line numbers (Shift-click or drag for a range), to
 comment. Post a single comment, or start a review that only you can see until you
 finish it as **Comment**, **Approve** or **Request changes**, or discard it. Reply to
-any thread where it is. Nothing is written to GitHub until you click.
+any thread where it is, and delete your own comments and replies (after a confirm
+step) from the trash button beside them. Nothing is written to GitHub until you click.
 
 <img width="2560" height="1720" alt="review" src="https://github.com/user-attachments/assets/6d004fa5-5794-4d52-8ba8-b577239a86fb" />
 
@@ -149,7 +174,9 @@ list does not mute its alerts.
 
 - A GitHub account on github.com (GitHub Enterprise Server is not supported yet).
 - By default, the [GitHub CLI](https://cli.github.com) login on the machine running bb
-  (`gh auth login`), so each user sees their own pull requests.
+  (`gh auth login`), so each user sees their own pull requests. If gh has more than
+  one github.com account, a picker on My PRs chooses which one the plugin uses; gh's
+  own active account is left alone.
 - Or a personal access token:
 
   ```
@@ -157,7 +184,7 @@ list does not mute its alerts.
   ```
 
   A classic token needs `repo`. A fine-grained one needs Pull requests read and
-  write (write only for comments, replies, reviews, close and reopen) and Checks read.
+  write (write only for comments, replies, deletes, reviews, edits, ready or draft, close and reopen) and Checks read.
   For organizations that enforce SAML SSO, authorize the token for them, or their
   pull requests are left out.
 - Alerts run while the bb server runs. Desktop notifications need bb's Push
@@ -174,8 +201,8 @@ branch (bb's GitHub PR Status may check with GitHub). Alerts and their state sta
 plugin's storage on your bb server. Desktop notifications hand each alert's headline
 (repository, number, who) and pull request title to bb's Push notifications plugin,
 which forwards them to registered phones through its push relay (Expo by default);
-turn `showDesktop` off to keep them on the server. The page loads 79 KB of script and 116 KB of CSS
-(24 KB and 9 KB gzipped); an install takes about 11 MB on disk.
+turn `showDesktop` off to keep them on the server. The page loads 130 KB of script and 103 KB of CSS
+(31 KB and 10 KB gzipped); an install takes about 11 MB on disk.
 
 ## Develop
 
@@ -190,11 +217,12 @@ echo '{"repo":"owner/name","number":1}' > in.json
 bb plugin rpc call bb-github-pr-dashboard pr_detail --input-file in.json
 ```
 
-- `server.ts`: the `prs_list`, `prs_history`, `pr_detail` and `pr_files` RPCs; the
+- `server.ts`: `accounts` and `account_select` (which gh login to use), the `prs_list`, `prs_history`, `pr_detail` and `pr_files` RPCs; the
   writes `pr_reply`, `pr_comment`, `pr_line_comment`, `pr_submit_review`,
-  `pr_discard_review` and `pr_set_state`, each sent only on an explicit click;
-  `pr_agent_target`, which finds the bb thread on a pull request's branch for Fix with
-  agent; the `watch` background service, which sends desktop notifications through
+  `pr_discard_review`, `pr_delete_comment`, `pr_edit` (title and description) and `pr_set_state` (close,
+  reopen, ready, draft), each sent only on an explicit click;
+  `pr_agent_target`, which finds the bb thread on a pull request's branch, its project and the threads to link;
+  `jira_link`, which asks My Jira whether it runs; the `watch` background service, which sends desktop notifications through
   push-notifications' `notifications.send`; and the `alerts_*` RPCs. Gets a token
   from the `token` setting, else from `gh auth token`.
 - `queries.ts`: the GraphQL text (server only). `prs.ts`: the pure mapping to rows,

@@ -220,3 +220,13 @@ export function Skeleton({ rows = 3 }: { rows?: number }) {
     </div>
   );
 }
+
+/** "+120 −30": lines added and removed, GitHub's colours. */
+export function LineCount({ additions, deletions }: { additions: number; deletions: number }) {
+  return (
+    <span className="inline-flex gap-1.5 font-mono tabular-nums" aria-label={`${additions} lines added, ${deletions} removed`}>
+      <span className="text-success">+{additions}</span>
+      <span className="text-destructive">−{deletions}</span>
+    </span>
+  );
+}

@@ -1,5 +1,6 @@
 // bb-github-pr-dashboard — frontend entry: the "My PRs" page in the nav rail.
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import type { ReactNode } from "react";
 import { UrlLink, definePluginApp, experimental_usePluginId, useBbNavigate, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./server";
@@ -10,6 +11,7 @@ import { AlertListener, AlertsStrip, NotificationSettings, useAlertBadge } from 
 import {
   EmptyState,
   Kbd,
+  LineCount,
   Pill,
   Segmented,
   Skeleton,
@@ -259,6 +261,7 @@ function PrRow({ pr, onOpen, showAuthor }: { pr: Pr; onOpen: () => void; showAut
           ) : null}
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
             <span className="tabular-nums">#{pr.number}</span>
+            <LineCount additions={pr.additions} deletions={pr.deletions} />
             {showAuthor ? <span>by {pr.author}</span> : null}
             <span>{when}</span>
             {ci && pr.ci === "passing" ? (
@@ -502,6 +505,7 @@ function ListView({
           {fetchedAt ? (
             <span className="hidden text-xs text-muted-foreground sm:inline">Updated {ago(fetchedAt)}</span>
           ) : null}
+          <AccountPicker />
           <UrlLink
             href={`/settings/plugins/${pluginId}`}
             aria-label="Notification settings"
@@ -704,7 +708,88 @@ function parseRoute(subPath: string): { repo: string; number: number } | null {
   }
 }
 
+/** Forget everything loaded for the previous account. */
+function forgetLoaded() {
+  cachedLists = {};
+  cachedCounts = null;
+  cachedAt = null;
+  for (const k of Object.keys(cachedHistory) as HistoryTab[]) delete cachedHistory[k];
+  listOrder = [];
+  listScroll = 0;
+  lastOpened = null;
+}
+
+let cachedAccounts: { accounts: { login: string; ghActive: boolean }[]; selected: string | null; usingToken: boolean } | null = null;
+const AccountSwitched = createContext<() => void>(() => {});
+
+/** Shown only when gh has more than one github.com login and no token is set in the settings. */
+function AccountPicker() {
+  const rpc = useRpc<typeof rpcContract>();
+  const switched = useContext(AccountSwitched);
+  const [data, setData] = useState(cachedAccounts);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (cachedAccounts) return;
+    rpc.call("accounts", {}).then(
+      (r) => {
+        cachedAccounts = r;
+        setData(r);
+      },
+      () => {}, // no picker; the list shows its own auth error
+    );
+  }, [rpc]);
+  if (!data || data.usingToken || data.accounts.length < 2) return null;
+  const choose = async (login: string) => {
+    setBusy(true);
+    try {
+      await rpc.call("account_select", { login });
+      cachedAccounts = { ...data, selected: login };
+      setData(cachedAccounts);
+      toast.success(`Showing pull requests for ${login}`);
+      switched();
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <label className="relative inline-flex items-center text-muted-foreground hover:text-foreground">
+      <span className="sr-only">GitHub account</span>
+      <Icon name="Github" className="pointer-events-none absolute left-2.5 size-3.5" aria-hidden />
+      <select
+        value={data.selected ?? ""}
+        disabled={busy}
+        onChange={(e) => void choose(e.target.value)}
+        className="h-9 max-w-[12rem] cursor-pointer appearance-none truncate rounded-[var(--prd-radius-control)] border border-border bg-background pl-8 pr-7 text-xs font-medium text-foreground outline-none transition-colors duration-[var(--prd-hover)] hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+      >
+        {data.accounts.map((a) => (
+          <option key={a.login} value={a.login}>
+            {a.login}
+            {a.ghActive ? " (gh default)" : ""}
+          </option>
+        ))}
+      </select>
+      <Icon name="ChevronDown" className="pointer-events-none absolute right-2 size-3.5" aria-hidden />
+    </label>
+  );
+}
+
+/** Switching account remounts the page, so every list, count and PR reloads as the new account. */
 function PrsPage({ subPath }: { subPath: string }) {
+  const [account, setAccount] = useState(0);
+  const switched = useCallback(() => {
+    forgetLoaded();
+    setAccount((n) => n + 1);
+  }, []);
+  return (
+    <AccountSwitched.Provider value={switched}>
+      <PrsPageBody key={account} subPath={subPath} />
+    </AccountSwitched.Provider>
+  );
+}
+
+function PrsPageBody({ subPath }: { subPath: string }) {
   // Owned here, not in ListView, so the list and tab survive a visit to a PR.
   const [tab, setTabState] = useState<Tab>(lastTab);
   const setTab = (next: Tab) => {

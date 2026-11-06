@@ -1,7 +1,7 @@
 // Run: node --test prs.test.ts   (Node 22.18+ strips the types itself)
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { agentTarget, canSubmitReview, checkOf, fixPrompt, repoOfRemote, matchesSearch, commentRange, commentTarget, fullPatch, prFromUrl, rangeFromSelection, diffWatch, latestChecks, parsePatch, pushText, reviewEvents, stackOf, threadStatus, toDetail, toFiles, toList, toPr, toWatched, type AgentThread, type RawDetail, type RawPr, type RawWatchPr, type Thread, type Watched } from "./prs.ts";
+import { jiraHref, jiraPrefixes, jiraSite, linkJira, findingsPrompt, projectFor, linkCandidates, agentTarget, canSubmitReview, checkOf, fixPrompt, repoOfRemote, matchesSearch, commentRange, commentTarget, fullPatch, prFromUrl, rangeFromSelection, diffWatch, latestChecks, parsePatch, pushText, reviewEvents, stackOf, threadStatus, toDetail, toFiles, toList, toPr, toWatched, type AgentThread, type RawDetail, type RawPr, type RawWatchPr, type Thread, type Watched } from "./prs.ts";
 
 const base: RawPr = {
   id: "PR_1",
@@ -442,4 +442,108 @@ test("a review goes stale when the author pushes after it or it is dismissed", (
   assert.deepEqual(reviewed("CHANGES_REQUESTED", "old"), { state: "CHANGES_REQUESTED", stale: true });
   assert.deepEqual(reviewed("DISMISSED", "abc"), { state: "DISMISSED", stale: true });
   assert.equal(toPr(base).myReview, null);
+});
+
+test("commits come newest first, with CI and the commit you last reviewed", () => {
+  const commit = (oid: string, state: string | null, user: string | null) => ({
+    commit: {
+      oid, abbreviatedOid: oid.slice(0, 7), messageHeadline: `fix ${oid}`, committedDate: "2026-01-01T00:00:00Z",
+      statusCheckRollup: state ? { state } : null,
+      author: { name: "Dev Name", avatarUrl: null, user: user ? { login: user } : null },
+    },
+  });
+  const d = toDetail({
+    ...rawDetail,
+    viewerLatestReview: { commit: { oid: "aaaaaaa1" } },
+    history: { totalCount: 120, nodes: [commit("aaaaaaa1", "SUCCESS", "dev"), commit("bbbbbbb2", "FAILURE", null)] },
+  });
+  assert.deepEqual(d.commits.map((c) => [c.shortOid, c.ci, c.author]), [["bbbbbbb", "failing", "Dev Name"], ["aaaaaaa", "passing", "dev"]]);
+  assert.equal(d.commitCount, 120);
+  assert.equal(d.myReviewOid, "aaaaaaa1");
+  assert.deepEqual(toDetail(rawDetail).commits, []);
+});
+
+test("only comments GitHub lets you delete carry a delete id", () => {
+  const d = toDetail({
+    ...rawDetail,
+    id: "PR_1",
+    comments: { nodes: [{ ...c("me", "2026-10-05T00:00:00Z"), id: "IC_1", viewerCanDelete: true }, c("bot", "2026-10-06T00:00:00Z")] },
+  });
+  const [description, ...rest] = d.timeline;
+  assert.deepEqual([description!.id, description!.canDelete], ["", false]);
+  assert.deepEqual(rest.map((e) => [e.id, e.canDelete, e.reviewState]), [
+    ["", false, "CHANGES_REQUESTED"],
+    ["IC_1", true, null],
+    ["", false, null],
+  ]);
+});
+
+test("reviewers: asked-for first, then other reviewers, never the author; labels keep only hex colours", () => {
+  const d = toDetail({
+    ...rawDetail,
+    reviewRequests: { nodes: [
+      { requestedReviewer: { __typename: "User", login: "ana", avatarUrl: null } },
+      { requestedReviewer: { __typename: "Team", name: "platform", avatarUrl: null } },
+    ] },
+    latestReviews: { nodes: [
+      { author: { login: "ana" }, state: "APPROVED" },
+      { author: { login: "bo" }, state: "CHANGES_REQUESTED" },
+      { author: me, state: "COMMENTED" },
+    ] },
+    labels: { nodes: [{ name: "bug", color: "d73a4a" }, { name: "odd", color: "red;x" }] },
+  });
+  assert.deepEqual(d.reviewers.map((r) => [r.name, r.team, r.state]), [
+    ["ana", false, "REQUESTED"],
+    ["platform", true, "REQUESTED"],
+    ["bo", false, "CHANGES_REQUESTED"],
+  ]);
+  assert.deepEqual(d.labels, [{ name: "bug", color: "d73a4a" }, { name: "odd", color: null }]);
+});
+
+test("jira: prefixes come from bracketed keys, branches and Jira URLs only", () => {
+  assert.deepEqual([...jiraPrefixes("[ABC-12] Fix UTF-8 parsing", "feature/ABC-12/parse", "uses SHA-256")], ["ABC"]);
+  assert.equal(jiraSite("see https://acme.atlassian.net/browse/ABC-1 now"), "https://acme.atlassian.net");
+  assert.equal(jiraHref("ABC-1", { plugin: true, siteUrl: null }), "/plugins/my-jira/tickets/ABC-1");
+  assert.equal(jiraHref("ABC-1", { plugin: false, siteUrl: "https://acme.atlassian.net/" }), "https://acme.atlassian.net/browse/ABC-1");
+  assert.equal(jiraHref("ABC-1", { plugin: false, siteUrl: null }), null);
+});
+
+test("jira: keys linked in prose, not in code or existing links; URLs go to My Jira when it runs", () => {
+  const href = (k: string) => `/plugins/my-jira/tickets/${k}`;
+  const md = "Fixes ABC-7 and UTF-8.\n`ABC-8` stays\n```\nABC-9\n```\n[ABC-10](https://acme.atlassian.net/browse/ABC-10) and https://acme.atlassian.net/browse/ABC-11 plus https://x.io/ABC-12";
+  assert.equal(
+    linkJira(md, new Set(["ABC"]), href, true),
+    "Fixes [ABC-7](/plugins/my-jira/tickets/ABC-7) and UTF-8.\n`ABC-8` stays\n```\nABC-9\n```\n[ABC-10](/plugins/my-jira/tickets/ABC-10) and [ABC-11](/plugins/my-jira/tickets/ABC-11) plus https://x.io/ABC-12",
+  );
+  // Without My Jira, Jira URLs are left alone and bare keys go to the site.
+  assert.equal(linkJira("ABC-7 https://acme.atlassian.net/browse/ABC-1", new Set(["ABC"]), (k) => `https://acme.atlassian.net/browse/${k}`, false),
+    "[ABC-7](https://acme.atlassian.net/browse/ABC-7) https://acme.atlassian.net/browse/ABC-1");
+});
+
+test("projectFor: git remote first, then a project named like the repo, never a guess between two", () => {
+  const p = (id: string, name: string, gitRemoteUrl: string | null = null) => ({ id, name, gitRemoteUrl });
+  assert.equal(projectFor("acme/billing-api", [p("a", "billing-api"), p("b", "x", "git@github.com:acme/billing-api.git")]), "b");
+  assert.equal(projectFor("acme/billing-api", [p("a", "Billing API"), p("c", "other")]), "a");
+  assert.equal(projectFor("acme/billing-api", [p("a", "billing-api-v2")]), "a");
+  assert.equal(projectFor("acme/billing-api", [p("a", "billing-api-v2"), p("b", "new-billing-api")]), null);
+});
+
+test("link candidates: the branch thread, then the project's, then the rest", () => {
+  const t = (id: string, projectId: string, updatedAt: number, archivedAt: number | null = null) => ({
+    id, projectId, updatedAt, archivedAt, environmentId: null, environmentBranchName: null, title: id, titleFallback: null,
+  });
+  const out = linkCandidates([t("x", "p2", 9), t("y", "p1", 1), t("z", "p1", 5), t("old", "p1", 7, 3)], [{ id: "p1", name: "repo" }], { thread: { id: "y" }, projectId: "p1" });
+  assert.deepEqual(out.map((r) => [r.id, r.project]), [["y", "repo"], ["z", "repo"], ["x", ""]]);
+});
+
+test("findings prompt: every unresolved thread and failed job, numbered", () => {
+  const d = toDetail(rawDetail);
+  const subjects = [
+    ...d.threads.filter((x) => !x.isResolved).map((thread) => ({ kind: "thread" as const, thread })),
+    ...d.checks.filter((c) => c.status === "failing").map((check) => ({ kind: "check" as const, check })),
+  ];
+  const text = findingsPrompt(d, subjects);
+  assert.match(text, /### 1\. Review comment/);
+  assert.match(text, /### 3\. Failed CI job/);
+  assert.match(text, /Fix what is blocking it on branch `feat`/);
 });

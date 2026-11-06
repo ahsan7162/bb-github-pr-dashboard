@@ -9,7 +9,13 @@ import { PatchDiff, type DiffLineAnnotation, type SelectedLineRange } from "@pie
 import type { rpcContract } from "./server";
 import {
   canSubmitReview,
+  findingsPrompt,
   fixPrompt,
+  jiraHref,
+  jiraPrefixes,
+  jiraSite,
+  linkJira,
+  prPrompts,
   fullPatch,
   parsePatch,
   rangeFromSelection,
@@ -19,11 +25,12 @@ import {
   type CommentRange,
   type FixSubject,
   type ReviewEvent,
-  type CheckDetail, type Comment, type Pr, type PrDetail, type PrFile, type Thread, type TimelineEntry } from "./prs";
+  type CheckDetail, type Comment, type Pr, type PrCommit, type PrDetail, type Reviewer, type PrFile, type Thread, type TimelineEntry } from "./prs";
 import {
   Avatar,
   EmptyState,
   Kbd,
+  LineCount,
   Pill,
   Segmented,
   Skeleton,
@@ -72,10 +79,41 @@ const REVIEW: Record<string, { verb: string; tone: Tone; icon: string }> = {
 
 /** Markdown from GitHub, kept inside its column (wide code blocks scroll). */
 function Body({ content }: { content: string }) {
+  const jira = useContext(JiraContext);
   return (
     <div className="min-w-0 overflow-x-auto break-words text-sm [&_img]:max-w-full [&_pre]:max-w-full [&_pre]:overflow-x-auto [&_table]:block [&_table]:overflow-x-auto">
-      <Markdown content={content} />
+      <Markdown content={jira ? linkJira(content, jira.prefixes, jira.href, jira.plugin) : content} />
     </div>
+  );
+}
+
+/** How this PR's Jira keys link: to My Jira when it runs, else to the Jira site. Null until known. */
+interface JiraLinker {
+  prefixes: ReadonlySet<string>;
+  href: (key: string) => string | null;
+  plugin: boolean;
+}
+const JiraContext = createContext<JiraLinker | null>(null);
+let cachedJira: { plugin: boolean; siteUrl: string | null } | null = null;
+
+/** A title with its Jira keys as links. */
+function JiraTitle({ title }: { title: string }) {
+  const jira = useContext(JiraContext);
+  if (!jira || jira.prefixes.size === 0) return <>{title}</>;
+  const parts = title.split(new RegExp(`((?:${[...jira.prefixes].join("|")})-\\d+)`));
+  return (
+    <>
+      {parts.map((part, i) => {
+        const to = i % 2 === 1 ? jira.href(part) : null;
+        return to ? (
+          <UrlLink key={i} href={to} className="underline decoration-muted-foreground/50 underline-offset-4 hover:decoration-foreground">
+            {part}
+          </UrlLink>
+        ) : (
+          part
+        );
+      })}
+    </>
   );
 }
 
@@ -183,38 +221,53 @@ function Composer({
 const PrContext = createContext<PrDetail | null>(null);
 
 /** Sends a comment or failed job to the bb thread on this PR's branch, else opens a new thread prefilled with it. */
-function FixWithAgent({ subject }: { subject: FixSubject }) {
-  const pr = useContext(PrContext);
+/**
+ * Hands a prompt to bb: `fix` goes to the thread already on the PR's branch (queued if busy), else opens New thread;
+ * `compose` always opens New thread. Either way the PR's project is preselected when one matches.
+ */
+function useHandOff() {
   const rpc = useRpc<typeof rpcContract>();
   const sdk = useSdk();
   const nav = useBbNavigate();
+  const target = (pr: PrDetail) => rpc.call("pr_agent_target", { repo: pr.repo, number: pr.number, headRefName: pr.headRefName });
+  const send = async (threadId: string, title: string, prompt: string) => {
+    await sdk.threads.send({ threadId, mode: "queue-if-active", input: [{ type: "text", text: prompt, mentions: [] }] });
+    toast.success(`Sent to ${title}`, { action: { label: "Open", onClick: () => nav.toThread(threadId) } });
+  };
+  const handOff = async (pr: PrDetail, prompt: string, mode: "fix" | "compose") => {
+    let projectId: string | null = null;
+    try {
+      const t = await target(pr);
+      projectId = t.projectId;
+      if (mode === "fix" && t.thread) return await send(t.thread.id, t.thread.title, prompt);
+    } catch (cause) {
+      if (mode === "fix") {
+        toast.error("Could not send it to the PR's thread, so starting a new one", {
+          description: cause instanceof Error ? cause.message : String(cause),
+        });
+      }
+    }
+    nav.toCompose({ ...(projectId ? { projectId } : {}), initialPrompt: prompt, focusPrompt: true });
+  };
+  return { handOff, target, send };
+}
+
+function FixWithAgent({ subject }: { subject: FixSubject }) {
+  const pr = useContext(PrContext);
+  const { handOff } = useHandOff();
   const [busy, setBusy] = useState(false);
   if (!pr) return null;
   const run = async () => {
     setBusy(true);
-    const prompt = fixPrompt(pr, subject);
-    let projectId: string | null = null;
     try {
-      const target = await rpc.call("pr_agent_target", { repo: pr.repo, number: pr.number, headRefName: pr.headRefName });
-      projectId = target.projectId;
-      const thread = target.thread;
-      if (thread) {
-        await sdk.threads.send({ threadId: thread.id, mode: "queue-if-active", input: [{ type: "text", text: prompt, mentions: [] }] });
-        toast.success(`Sent to ${thread.title}`, { action: { label: "Open", onClick: () => nav.toThread(thread.id) } });
-        return;
-      }
-    } catch (cause) {
-      toast.error("Could not send it to the PR's thread, so starting a new one", {
-        description: cause instanceof Error ? cause.message : String(cause),
-      });
+      await handOff(pr, fixPrompt(pr, subject), "fix");
     } finally {
       setBusy(false);
     }
-    nav.toCompose({ ...(projectId ? { projectId } : {}), initialPrompt: prompt, focusPrompt: true });
   };
   return (
     <Button size="sm" variant="outline" onClick={run} disabled={busy}>
-      <Icon name="Sparkles" className="size-3.5" />
+      <Glyph name="fix" className="size-3.5" />
       Fix with agent
     </Button>
   );
@@ -500,7 +553,7 @@ function FileDiff({
               <Spine tone="warn" />
               {t.startLine && t.startLine !== t.line ? <p className="text-xs text-muted-foreground">Lines {lineLabel(t)}</p> : null}
               {t.comments.map((c, ci) => (
-                <CommentBlock key={ci} comment={c}>
+                <CommentBlock key={ci} comment={c} onDeleted={review.onSaved}>
                   <Pill tone="warn">Pending</Pill>
                 </CommentBlock>
               ))}
@@ -890,7 +943,7 @@ function FilesTab({
 
 // ---- Review threads ----
 
-function CommentBlock({ comment, children }: { comment: Comment; children?: ReactNode }) {
+function CommentBlock({ comment, onDeleted, children }: { comment: Comment; onDeleted?: () => void; children?: ReactNode }) {
   return (
     <div className="flex gap-2.5">
       <Avatar login={comment.author} url={comment.avatarUrl} size={24} />
@@ -901,10 +954,58 @@ function CommentBlock({ comment, children }: { comment: Comment; children?: Reac
           <UrlLink href={comment.url} className="text-muted-foreground hover:underline">
             {ago(comment.createdAt)}
           </UrlLink>
+          {onDeleted ? <DeleteComment comment={comment} kind="review" onDeleted={onDeleted} /> : null}
         </div>
         {comment.body.trim() ? <Body content={comment.body} /> : null}
       </div>
     </div>
+  );
+}
+
+/** Delete one of your own comments, after a confirm step. */
+function DeleteComment({ comment, kind, onDeleted }: { comment: Comment; kind: "issue" | "review"; onDeleted: () => void }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const viewer = useContext(PrContext)?.viewer;
+  // Write access lets GitHub delete anyone's comment; only offer it on your own.
+  if (!comment.canDelete || !comment.id || !viewer || comment.author !== viewer) return null;
+  const run = async () => {
+    setBusy(true);
+    try {
+      await rpc.call("pr_delete_comment", { id: comment.id, kind });
+      toast.success("Comment deleted");
+      onDeleted();
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : String(cause));
+      setBusy(false);
+      setConfirming(false);
+    }
+  };
+  return confirming ? (
+    <span className="ml-auto inline-flex items-center gap-1">
+      <span className="text-muted-foreground">Delete this comment?</span>
+      <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirming(false)}>
+        Cancel
+      </Button>
+      <Button size="sm" variant="destructive" disabled={busy} onClick={() => void run()}>
+        {busy ? "Deleting…" : "Delete"}
+      </Button>
+    </span>
+  ) : (
+    <button
+      type="button"
+      aria-label="Delete comment"
+      title="Delete comment"
+      onClick={() => setConfirming(true)}
+      className="ml-auto inline-flex size-6 items-center justify-center rounded-[var(--prd-radius-control)] text-muted-foreground transition-colors duration-[var(--prd-hover)] hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <svg viewBox="0 0 24 24" className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M3 6h18" />
+        <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+        <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+      </svg>
+    </button>
   );
 }
 
@@ -1015,7 +1116,7 @@ function ThreadCard({
       {thread.diffHunk && !inline ? <Hunk hunk={thread.diffHunk} /> : null}
       <div className="space-y-4">
         {thread.comments.map((c, i) => (
-          <CommentBlock key={i} comment={c} />
+          <CommentBlock key={i} comment={c} onDeleted={onPosted} />
         ))}
         {replying ? (
           <Composer
@@ -1132,24 +1233,83 @@ function ThreadsTab({
   );
 }
 
-// ---- Conversation ----
+// ---- Overview: the description, then comments and reviews ----
 
 function ConversationTab({
   timeline,
   prUrl,
   subjectId,
+  body,
+  canEdit,
   onPosted,
 }: {
   timeline: TimelineEntry[];
   prUrl: string;
   subjectId: string;
+  body: string;
+  canEdit: boolean;
   onPosted: () => void;
 }) {
   const rpc = useRpc<typeof rpcContract>();
+  const [editing, setEditing] = useState(false);
+  useEffect(() => setEditing(false), [subjectId]);
+  const description = timeline.find((e) => e.url === prUrl);
+  const activity = timeline.filter((e) => e !== description);
   return (
     // A conversation is prose: keep its lines readable on wide tabs.
     <div className="max-w-4xl space-y-8">
-      {timeline.length === 0 ? <EmptyState icon="MessageSquare">No comments yet.</EmptyState> : <Timeline timeline={timeline} prUrl={prUrl} />}
+      {editing ? (
+        <section aria-label="Edit the description" className="rounded-[var(--prd-radius-panel)] border border-border bg-muted/30 p-5">
+          <InlineEdit
+            key={subjectId}
+            value={body}
+            label="Description"
+            multiline
+            placeholder="Describe the change (Markdown)"
+            onCancel={() => setEditing(false)}
+            onSave={async (next) => {
+              await rpc.call("pr_edit", { prId: subjectId, body: next });
+              toast.success("Description updated");
+              setEditing(false);
+              onPosted();
+            }}
+          />
+        </section>
+      ) : description ? (
+        <section aria-label="Description" className="relative space-y-3 overflow-hidden rounded-[var(--prd-radius-panel)] border border-border bg-muted/30 p-5">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Avatar login={description.author} url={description.avatarUrl} size={20} />
+            <span className="font-semibold">{description.author}</span>
+            <span className="text-muted-foreground">opened this pull request</span>
+            <UrlLink href={description.url} className="text-muted-foreground hover:underline">
+              {ago(description.createdAt)}
+            </UrlLink>
+            {canEdit && subjectId ? (
+              <span className="ml-auto">
+                <EditButton label="Edit description" onClick={() => setEditing(true)} />
+              </span>
+            ) : null}
+          </div>
+          <Body content={description.body} />
+        </section>
+      ) : (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          No description.
+          {canEdit && subjectId ? (
+            <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
+              Add one
+            </Button>
+          ) : null}
+        </div>
+      )}
+      <section aria-label="Activity" className="space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Activity</h3>
+        {activity.length === 0 ? (
+          <EmptyState icon="MessageSquare">No comments or reviews yet.</EmptyState>
+        ) : (
+          <Timeline timeline={activity} onDeleted={onPosted} />
+        )}
+      </section>
       {subjectId ? (
         <section aria-label="Add a comment" className="space-y-3 rounded-[var(--prd-radius-panel)] border border-border p-4">
           <h4 className="text-xs font-semibold">Add a comment</h4>
@@ -1173,7 +1333,7 @@ function ConversationTab({
   );
 }
 
-function Timeline({ timeline, prUrl }: { timeline: TimelineEntry[]; prUrl: string }) {
+function Timeline({ timeline, onDeleted }: { timeline: TimelineEntry[]; onDeleted: () => void }) {
   return (
     <ol className="relative space-y-6 before:absolute before:bottom-0 before:left-4 before:top-0 before:w-px before:bg-border">
       {timeline.map((entry, i) => {
@@ -1192,11 +1352,12 @@ function Timeline({ timeline, prUrl }: { timeline: TimelineEntry[]; prUrl: strin
                     {review.verb}
                   </span>
                 ) : (
-                  <span className="text-muted-foreground">{entry.url === prUrl ? "opened this pull request" : "commented"}</span>
+                  <span className="text-muted-foreground">commented</span>
                 )}
                 <UrlLink href={entry.url} className="text-muted-foreground hover:underline">
                   {ago(entry.createdAt)}
                 </UrlLink>
+                {review ? null : <DeleteComment comment={entry} kind="issue" onDeleted={onDeleted} />}
               </div>
               {entry.body.trim() ? <Body content={entry.body} /> : null}
             </div>
@@ -1207,12 +1368,75 @@ function Timeline({ timeline, prUrl }: { timeline: TimelineEntry[]; prUrl: strin
   );
 }
 
+/** Newest first; the commits after your latest review are marked, since they are what a re-review covers. */
+function CommitsTab({ commits, total, prUrl, myReviewOid }: { commits: PrCommit[]; total: number; prUrl: string; myReviewOid: string | null }) {
+  if (commits.length === 0) return <EmptyState icon="GitBranch">No commits.</EmptyState>;
+  const reviewed = myReviewOid ? commits.findIndex((c) => c.oid === myReviewOid) : -1;
+  return (
+    <div className="max-w-4xl space-y-3">
+      {total > commits.length ? (
+        <p className="text-xs text-muted-foreground">
+          The latest {commits.length} of {total} commits.{" "}
+          <UrlLink href={`${prUrl}/commits`} className="hover:underline">
+            All on GitHub
+          </UrlLink>
+        </p>
+      ) : null}
+      <ol className="space-y-1">
+        {commits.map((c, i) => (
+          <li key={c.oid}>
+            {i === reviewed ? (
+              <p className={cn("mb-1 mt-3 flex items-center gap-2 text-xs font-medium", i > 0 ? TONE_TEXT.warn : "text-muted-foreground")}>
+                <Icon name="Eye" className="size-3.5" aria-hidden />
+                {i > 0 ? `Your latest review was here; ${i} new ${i === 1 ? "commit" : "commits"} above` : "Your latest review was on this commit"}
+              </p>
+            ) : null}
+            <div className="relative flex items-center gap-3 rounded-[var(--prd-radius-control)] px-3 py-2 hover:bg-muted/60">
+              {reviewed > 0 && i < reviewed ? <Spine tone="warn" /> : null}
+              <Avatar login={c.author} url={c.avatarUrl} size={24} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium" title={c.headline}>
+                  {c.headline}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {c.author} committed {ago(c.committedDate)}
+                </p>
+              </div>
+              {c.ci ? (
+                <Icon name={STATUS[c.ci].icon} className={cn("size-4 shrink-0", TONE_TEXT[STATUS[c.ci].tone])} aria-label={`CI ${c.ci}`} />
+              ) : null}
+              <UrlLink
+                href={`${prUrl}/commits/${c.oid}`}
+                className="shrink-0 rounded-[var(--prd-radius-control)] border border-border px-2 py-0.5 font-mono text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                {c.shortOid}
+              </UrlLink>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
 // ---- Page ----
 
 /** Close an open PR (with a confirm step) or reopen a closed one; merged PRs stay merged. */
-function StateButton({ prId, state, onDone }: { prId: string; state: string; onDone: () => void }) {
+/** Reopen a closed PR; for an open one, the confirm step after "Close pull request" in the menu. */
+function StateButton({
+  prId,
+  state,
+  confirming,
+  setConfirming,
+  onDone,
+}: {
+  prId: string;
+  state: string;
+  confirming: boolean;
+  setConfirming: (v: boolean) => void;
+  onDone: () => void;
+}) {
   const rpc = useRpc<typeof rpcContract>();
-  const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   if (!prId || (state !== "OPEN" && state !== "CLOSED")) return null;
   const action = state === "OPEN" ? "close" : "reopen";
@@ -1246,15 +1470,440 @@ function StateButton({ prId, state, onDone }: { prId: string; state: string; onD
         {busy ? "Closing…" : "Confirm close"}
       </Button>
     </>
+  ) : null;
+}
+
+const GLYPHS: Record<string, ReactNode> = {
+  link: (
+    <>
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </>
+  ),
+  ask: (
+    <>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+      <path d="M12 17h.01" />
+    </>
+  ),
+  explain: (
+    <>
+      <path d="M12 7v14" />
+      <path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" />
+    </>
+  ),
+  fix: <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />,
+  out: (
+    <>
+      <path d="M7 7h10v10" />
+      <path d="M7 17 17 7" />
+    </>
+  ),
+  hash: (
+    <>
+      <path d="M4 9h16" />
+      <path d="M4 15h16" />
+      <path d="M10 3 8 21" />
+      <path d="M16 3l-2 18" />
+    </>
+  ),
+  more: (
+    <>
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="19" cy="12" r="1" />
+      <circle cx="5" cy="12" r="1" />
+    </>
+  ),
+};
+/** Lucide outlines bb's icon set lacks, drawn inline. */
+function Glyph({ name, className }: { name: keyof typeof GLYPHS; className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={cn("size-4", className)} fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {GLYPHS[name]}
+    </svg>
+  );
+}
+
+type MenuItem =
+  | { label: string; detail?: string; icon: ReactNode; onSelect: () => void; disabled?: boolean; danger?: boolean }
+  | "separator";
+
+/** A small menu: arrows move, Enter picks, Esc or a click outside closes. */
+function Menu({ label, items }: { label: string; items: MenuItem[] }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (e: MouseEvent) => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", outside);
+    root.current?.querySelector<HTMLElement>("[role=menuitem]:not([disabled])")?.focus();
+    return () => document.removeEventListener("mousedown", outside);
+  }, [open]);
+  const onKey = (e: React.KeyboardEvent) => {
+    const all = Array.from(root.current?.querySelectorAll<HTMLElement>("[role=menuitem]:not([disabled])") ?? []);
+    const at = all.indexOf(document.activeElement as HTMLElement);
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setOpen(false);
+      trigger.current?.focus();
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      all[(at + (e.key === "ArrowDown" ? 1 : all.length - 1)) % all.length]?.focus();
+    }
+  };
+  return (
+    <div ref={root} className="relative" onKeyDown={onKey}>
+      <Button ref={trigger} variant="ghost" size="icon" aria-label={label} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <Glyph name="more" />
+      </Button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label={label}
+          className="absolute right-0 top-full z-50 mt-1 w-80 rounded-[var(--prd-radius-panel)] border border-border bg-popover p-1.5 text-popover-foreground shadow-lg"
+        >
+          {items.map((item, i) =>
+            item === "separator" ? (
+              <div key={i} role="separator" className="my-1.5 h-px bg-border" />
+            ) : (
+              <button
+                key={item.label}
+                type="button"
+                role="menuitem"
+                disabled={item.disabled}
+                onClick={() => {
+                  setOpen(false);
+                  item.onSelect();
+                }}
+                className={cn(
+                  "flex w-full items-start gap-3 rounded-[var(--prd-radius-control)] px-2.5 py-2 text-left text-sm outline-none transition-colors duration-[var(--prd-hover)] hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50",
+                  item.danger && "text-destructive",
+                )}
+              >
+                <span className={cn("mt-0.5 shrink-0", item.danger ? "text-destructive" : "text-muted-foreground")}>{item.icon}</span>
+                <span className="min-w-0">
+                  <span className="block">{item.label}</span>
+                  {item.detail ? <span className="block text-xs text-muted-foreground">{item.detail}</span> : null}
+                </span>
+              </button>
+            ),
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+type LinkThread = { id: string; title: string; project: string; updatedAt: number };
+
+/** Pick a bb thread to give this PR as context; its branch thread and its project's threads come first. */
+function LinkToThread({ pr, onClose }: { pr: PrDetail; onClose: () => void }) {
+  const { target, send } = useHandOff();
+  const [threads, setThreads] = useState<LinkThread[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    target(pr).then(
+      (t) => setThreads(t.threads),
+      (cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause)),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per open
+  }, []);
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  const shown = (threads ?? []).filter((t) => words.every((w) => `${t.title} ${t.project}`.toLowerCase().includes(w)));
+  const choose = async (t: LinkThread) => {
+    setBusy(true);
+    try {
+      await send(t.id, t.title, prPrompts.link(pr));
+      onClose();
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : String(cause));
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 pt-[12vh]" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Link this pull request to a thread"
+        onKeyDown={(e) => e.key === "Escape" && onClose()}
+        className="w-full max-w-lg space-y-3 rounded-[var(--prd-radius-panel)] border border-border bg-background p-4 shadow-xl"
+      >
+        <div className="space-y-1">
+          <h3 className="text-sm font-semibold">Link to thread</h3>
+          <p className="text-xs text-muted-foreground">Sends the pull request's link, branch and title to the thread you pick (queued if it is busy).</p>
+        </div>
+        <input
+          autoFocus
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && shown[0] && !busy) void choose(shown[0]);
+          }}
+          placeholder="Search threads by title or project"
+          aria-label="Search threads"
+          className="block w-full rounded-[var(--prd-radius-control)] border border-input bg-background px-3 py-2 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        />
+        {error ? (
+          <p role="alert" className="text-xs text-destructive">
+            {error}
+          </p>
+        ) : threads === null ? (
+          <Skeleton rows={3} />
+        ) : shown.length === 0 ? (
+          <p className="py-6 text-center text-xs text-muted-foreground">No threads match.</p>
+        ) : (
+          <ul className="max-h-[50vh] space-y-0.5 overflow-y-auto">
+            {shown.map((t) => (
+              <li key={t.id}>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void choose(t)}
+                  className="flex w-full items-center gap-3 rounded-[var(--prd-radius-control)] px-2.5 py-2 text-left outline-none transition-colors duration-[var(--prd-hover)] hover:bg-accent focus-visible:bg-accent disabled:opacity-50"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm">{t.title}</span>
+                    {t.project ? <span className="block truncate text-xs text-muted-foreground">{t.project}</span> : null}
+                  </span>
+                  <span className="shrink-0 text-xs text-muted-foreground">{ago(new Date(t.updatedAt).toISOString())}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The PR's ⋯ menu: hand it to a thread, ask or explain it, fix what blocks it, copy it, close it. */
+function PrMenu({ pr, onRefresh, onClose, onLink }: { pr: PrDetail; onRefresh: () => void; onClose: () => void; onLink: () => void }) {
+  const { handOff } = useHandOff();
+  const subjects: FixSubject[] = [
+    ...pr.threads.filter((t) => !!t.id && !t.isResolved && !t.isPending).map((thread) => ({ kind: "thread" as const, thread })),
+    ...pr.checks.filter((c) => c.status === "failing").map((check) => ({ kind: "check" as const, check })),
+  ];
+  const copy = (text: string, what: string) =>
+    navigator.clipboard.writeText(text).then(
+      () => toast.success(`Copied ${what}`),
+      () => toast.error(`Could not copy the ${what}`),
+    );
+  const items: MenuItem[] = [
+    { label: "Link to thread", icon: <Glyph name="link" />, onSelect: onLink },
+    { label: "Refresh", icon: <Icon name="RotateCcw" className="size-4" />, onSelect: onRefresh },
+    {
+      label: "Ask a question",
+      detail: "Opens a thread that knows which pull request you mean.",
+      icon: <Glyph name="ask" />,
+      onSelect: () => void handOff(pr, prPrompts.ask(pr), "compose"),
+    },
+    {
+      label: "Explain this PR",
+      detail: "A walk through the diff and what to read closely.",
+      icon: <Glyph name="explain" />,
+      onSelect: () => void handOff(pr, prPrompts.explain(pr), "compose"),
+    },
+    {
+      label: "Fix findings in a thread",
+      detail:
+        subjects.length > 0
+          ? `${subjects.length} unresolved ${subjects.length === 1 ? "comment or failed job" : "comments and failed jobs"}, to the branch's thread or a new one.`
+          : "Nothing unresolved or failing.",
+      icon: <Glyph name="fix" />,
+      disabled: subjects.length === 0,
+      onSelect: () => void handOff(pr, findingsPrompt(pr, subjects), "fix"),
+    },
+    "separator",
+    { label: "Open on GitHub", icon: <Glyph name="out" />, onSelect: () => window.open(pr.url, "_blank", "noopener") },
+    { label: "Copy link", icon: <Icon name="Copy" className="size-4" />, onSelect: () => void copy(pr.url, "link") },
+    { label: "Copy PR number", icon: <Glyph name="hash" />, onSelect: () => void copy(`#${pr.number}`, "PR number") },
+    ...(pr.state === "OPEN"
+      ? (["separator", { label: "Close pull request", icon: <Icon name="GitPullRequestClosed" className="size-4" />, danger: true, onSelect: onClose }] as MenuItem[])
+      : []),
+  ];
+  return <Menu label="Pull request actions" items={items} />;
+}
+
+/** Draft to Ready for review and back, on your own open PRs only. */
+function DraftButton({ prId, state, isDraft, onDone }: { prId: string; state: string; isDraft: boolean; onDone: () => void }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [busy, setBusy] = useState(false);
+  if (!prId || state !== "OPEN") return null;
+  const run = async () => {
+    setBusy(true);
+    try {
+      await rpc.call("pr_set_state", { prId, action: isDraft ? "ready" : "draft" });
+      toast.success(isDraft ? "Ready for review" : "Converted to draft");
+      onDone();
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return isDraft ? (
+    <Button size="sm" disabled={busy} onClick={() => void run()}>
+      <Icon name="Eye" className="size-3.5" />
+      {busy ? "Marking…" : "Ready for review"}
+    </Button>
   ) : (
-    <Button size="sm" variant="outline" onClick={() => setConfirming(true)}>
-      <Icon name="GitPullRequestClosed" className="size-3.5" />
-      Close PR
+    <Button size="sm" variant="ghost" disabled={busy} onClick={() => void run()}>
+      <Icon name="GitPullRequestDraft" className="size-3.5" />
+      {busy ? "Converting…" : "Convert to draft"}
     </Button>
   );
 }
 
-type DetailTab = "checks" | "files" | "threads" | "conversation";
+/** A small pencil button; bb's icon set has no pencil, so it is drawn here. */
+function EditButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className="inline-flex size-7 shrink-0 items-center justify-center rounded-[var(--prd-radius-control)] text-muted-foreground transition-colors duration-[var(--prd-hover)] hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <svg viewBox="0 0 24 24" className="size-3.5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" />
+        <path d="m15 5 4 4" />
+      </svg>
+    </button>
+  );
+}
+
+/** Edit one text in place; nothing is sent until Save. onSave throws to keep the editor open with the error. */
+function InlineEdit({
+  value,
+  label,
+  multiline,
+  placeholder,
+  onSave,
+  onCancel,
+}: {
+  value: string;
+  label: string;
+  multiline?: boolean;
+  placeholder?: string;
+  onSave: (value: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const next = multiline ? draft : draft.trim();
+  const canSave = next !== value && (multiline || next !== "") && !saving;
+  const save = async () => {
+    if (!canSave) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onSave(next);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setSaving(false);
+    }
+  };
+  const field =
+    "block w-full rounded-[var(--prd-radius-control)] border border-input bg-background px-3 py-2 outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60";
+  return (
+    <form
+      className="w-full space-y-2"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save();
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onCancel();
+        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          void save();
+        }
+      }}
+    >
+      {multiline ? (
+        <textarea
+          aria-label={label}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          disabled={saving}
+          autoFocus
+          placeholder={placeholder}
+          rows={Math.min(24, Math.max(6, draft.split("\n").length + 1))}
+          className={cn(field, "resize-y font-mono text-xs leading-relaxed")}
+        />
+      ) : (
+        <input aria-label={label} value={draft} onChange={(e) => setDraft(e.target.value)} disabled={saving} autoFocus className={cn(field, "text-base font-semibold")} />
+      )}
+      {error ? (
+        <p role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs text-muted-foreground">
+          {multiline ? "Markdown, ⌘↵ to save" : "↵ to save"}, Esc to cancel. Saves to GitHub as you.
+        </span>
+        <div className="ml-auto flex gap-2">
+          <Button type="button" size="sm" variant="ghost" onClick={onCancel} disabled={saving}>
+            Cancel
+          </Button>
+          <Button type="submit" size="sm" disabled={!canSave}>
+            {saving ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </div>
+    </form>
+  );
+}
+
+const REVIEWER: Record<string, { label: string; icon: string; tone: Tone }> = {
+  REQUESTED: { label: "review requested", icon: "Clock", tone: "warn" },
+  APPROVED: { label: "approved", icon: "CircleCheck", tone: "good" },
+  CHANGES_REQUESTED: { label: "requested changes", icon: "CircleX", tone: "bad" },
+  COMMENTED: { label: "commented", icon: "MessageSquare", tone: "neutral" },
+  DISMISSED: { label: "review dismissed", icon: "Minus", tone: "neutral" },
+};
+
+function ReviewerChip({ reviewer }: { reviewer: Reviewer }) {
+  const s = REVIEWER[reviewer.state] ?? REVIEWER.COMMENTED!;
+  return (
+    <span className="inline-flex items-center gap-1.5" title={`${reviewer.name}: ${s.label}`}>
+      <Avatar login={reviewer.name} url={reviewer.avatarUrl} size={18} />
+      <span className="font-medium text-foreground">{reviewer.team ? `@${reviewer.name}` : reviewer.name}</span>
+      <Icon name={s.icon} className={cn("size-3.5", TONE_TEXT[s.tone])} aria-label={s.label} />
+    </span>
+  );
+}
+
+/** A branch name that copies itself on click. */
+function BranchName({ name }: { name: string }) {
+  return (
+    <button
+      type="button"
+      aria-label={`Copy branch ${name}`}
+      onClick={() =>
+        navigator.clipboard.writeText(name).then(
+          () => toast.success(`Copied ${name}`),
+          () => toast.error("Could not copy the branch name"),
+        )
+      }
+      className="group/branch inline-flex max-w-[16rem] items-center gap-1 rounded-[var(--prd-radius-control)] px-1 font-mono transition-colors duration-[var(--prd-hover)] hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    >
+      <span className="truncate">{name}</span>
+      <Icon name="Copy" className="size-3 shrink-0 opacity-0 transition-opacity group-hover/branch:opacity-100 group-focus-visible/branch:opacity-100" aria-hidden />
+    </button>
+  );
+}
+
+type DetailTab = "checks" | "files" | "commits" | "threads" | "conversation";
 
 function firstTab(d: PrDetail): DetailTab {
   if (d.checks.some((c) => c.status === "failing" || c.status === "pending")) return "checks";
@@ -1297,10 +1946,14 @@ function FileList({
               aria-current={currentFile === f.path ? "location" : undefined}
               className={navItem(currentFile === f.path)}
             >
-              {/* The file name first: in a 15rem column the directory is what gives way. */}
-              <span className="flex min-w-0 flex-1 items-baseline gap-2 font-mono text-xs">
-                <span className="truncate">{f.path.slice(slash + 1)}</span>
-                {slash > 0 ? <span className="min-w-0 shrink-[100] truncate text-[11px] text-muted-foreground">{f.path.slice(0, slash)}</span> : null}
+              {/* The whole name on its own line; the folder under it loses its start, not its end. */}
+              <span className="flex min-w-0 flex-1 flex-col gap-0.5 font-mono text-xs">
+                <span className="break-all">{f.path.slice(slash + 1)}</span>
+                {slash > 0 ? (
+                  <span dir="rtl" className="truncate text-left text-[11px] text-muted-foreground">
+                    <bdi dir="ltr">{f.path.slice(0, slash)}</bdi>
+                  </span>
+                ) : null}
               </span>
               {open > 0 ? (
                 <span className="inline-flex shrink-0 items-center gap-0.5 text-xs text-muted-foreground" aria-label={`${open} unresolved`}>
@@ -1370,6 +2023,26 @@ export function PrDetailView({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState<DetailTab | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [confirmClose, setConfirmClose] = useState(false);
+  const [linking, setLinking] = useState(false);
+  const [jira, setJira] = useState(cachedJira);
+  useEffect(() => {
+    if (cachedJira) return;
+    rpc.call("jira_link", {}).then(
+      (r) => {
+        cachedJira = r;
+        setJira(r);
+      },
+      () => {},
+    );
+  }, [rpc]);
+  // Previous and Next keep this view mounted: never carry an open editor to another PR.
+  useEffect(() => {
+    setEditing(false);
+    setConfirmClose(false);
+    setLinking(false);
+  }, [repo, number]);
   const load = useCallback(() => {
     setLoading(true);
     rpc
@@ -1405,6 +2078,11 @@ export function PrDetailView({
   const failing = detail?.checks.filter((c) => c.status === "failing").length ?? 0;
   const unresolved = detail?.threads.filter((t) => !t.isResolved && !t.isPending).length ?? 0;
   const drafts = detail?.threads.filter((t) => t.isPending).length ?? 0;
+  const comments = detail?.timeline.filter((e) => e.url !== detail.url).length ?? 0;
+  // Commits since your latest review, when that review is on one of the commits loaded.
+  const reviewedAt = detail?.myReviewOid ? detail.commits.findIndex((c) => c.oid === detail.myReviewOid) : -1;
+  // Not found (a force-push, or older than the last 100): everything loaded came after it.
+  const newCommits = detail?.state !== "OPEN" || !detail.myReviewOid ? 0 : reviewedAt === -1 ? detail.commits.length : reviewedAt;
   const headTone: Tone = blockers.some((b) => blockerTone(b) === "bad")
     ? "bad"
     : blockers.some((b) => blockerTone(b) === "warn")
@@ -1563,7 +2241,15 @@ export function PrDetailView({
     return () => window.removeEventListener("keydown", onKey);
   }, [detail, files, currentFile, jump, position, onOpenPr]);
 
+  const jiraLinker = useMemo<JiraLinker | null>(() => {
+    if (!detail || !jira) return null;
+    const target = { plugin: jira.plugin, siteUrl: jira.siteUrl ?? jiraSite(detail.body) };
+    return { prefixes: jiraPrefixes(detail.title, detail.headRefName, detail.body), href: (k) => jiraHref(k, target), plugin: target.plugin };
+  }, [detail, jira]);
+
   return (
+    <JiraContext.Provider value={jiraLinker}>
+    {linking && detail ? <LinkToThread pr={detail} onClose={() => setLinking(false)} /> : null}
     <div ref={page} tabIndex={-1} className="space-y-6 outline-none">
       {/* The header band: the blocker is the headline. */}
       <header className="group relative space-y-3 border-b border-border pb-6 pl-6">
@@ -1599,19 +2285,30 @@ export function PrDetailView({
             </span>
           ) : null}
           <div className="ml-auto flex items-center gap-1">
-            {detail ? (
-              <StateButton
+            {detail && detail.viewer === detail.author ? (
+              <DraftButton
                 prId={detail.id}
                 state={detail.state}
+                isDraft={detail.isDraft}
                 onDone={() => {
                   load();
                   onStateChanged();
                 }}
               />
             ) : null}
-            <Button variant="ghost" size="icon" aria-label="Refresh" disabled={loading} onClick={load}>
-              <Icon name="RotateCcw" className={cn("size-4", loading && "animate-spin")} />
-            </Button>
+            {detail ? (
+              <StateButton
+                prId={detail.id}
+                state={detail.state}
+                confirming={confirmClose}
+                setConfirming={setConfirmClose}
+                onDone={() => {
+                  load();
+                  onStateChanged();
+                }}
+              />
+            ) : null}
+            {loading ? <Icon name="RotateCcw" className="size-4 animate-spin text-muted-foreground" aria-label="Refreshing" /> : null}
             <UrlLink
               href={`https://github.com/${repo}/pull/${number}`}
               className="inline-flex h-8 items-center gap-1.5 rounded-[var(--prd-radius-control)] border border-border px-3 text-xs font-medium transition-colors duration-[var(--prd-hover)] ease-[var(--prd-ease-out)] hover:bg-accent"
@@ -1620,6 +2317,7 @@ export function PrDetailView({
               <span className="hidden sm:inline">Open on GitHub</span>
               <span className="sm:hidden">GitHub</span>
             </UrlLink>
+            {detail ? <PrMenu pr={detail} onRefresh={load} onClose={() => setConfirmClose(true)} onLink={() => setLinking(true)} /> : null}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -1630,7 +2328,28 @@ export function PrDetailView({
             {repo}#{number}
           </span>
         </div>
-        <h2 className="text-[length:var(--prd-text-title)] font-semibold leading-snug">{detail?.title ?? summary?.title ?? key}</h2>
+        {detail && editing ? (
+          <InlineEdit
+            key={detail.id}
+            value={detail.title}
+            label="Title"
+            onCancel={() => setEditing(false)}
+            onSave={async (title) => {
+              await rpc.call("pr_edit", { prId: detail.id, title });
+              toast.success("Title updated");
+              setEditing(false);
+              load();
+              onStateChanged();
+            }}
+          />
+        ) : (
+          <div className="flex items-start gap-1.5">
+            <h2 className="min-w-0 text-[length:var(--prd-text-title)] font-semibold leading-snug">
+              <JiraTitle title={detail?.title ?? summary?.title ?? key} />
+            </h2>
+            {detail?.canEdit ? <EditButton label="Edit title" onClick={() => setEditing(true)} /> : null}
+          </div>
+        )}
         {detail ? (
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1.5">
@@ -1640,13 +2359,38 @@ export function PrDetailView({
             <span>
               {state.label === "Merged" ? "merged" : state.label === "Closed" ? "wanted to merge" : "wants to merge"}
             </span>
-            <code className="max-w-[16rem] truncate font-mono" title={detail.headRefName}>
-              {detail.headRefName}
-            </code>
+            <BranchName name={detail.headRefName} />
             <Icon name="ArrowRight" className="size-3" aria-hidden />
-            <code className="max-w-[16rem] truncate font-mono" title={detail.baseRefName}>
-              {detail.baseRefName}
-            </code>
+            <BranchName name={detail.baseRefName} />
+            <span className="ml-1 inline-flex items-center gap-1.5">
+              <LineCount additions={detail.additions} deletions={detail.deletions} />
+              <span>
+                in {detail.changedFiles} {detail.changedFiles === 1 ? "file" : "files"}
+              </span>
+            </span>
+          </div>
+        ) : null}
+        {detail && (detail.reviewers.length > 0 || detail.labels.length > 0) ? (
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-muted-foreground">
+            {detail.reviewers.length > 0 ? (
+              <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <span>Reviewers</span>
+                {detail.reviewers.map((r) => (
+                  <ReviewerChip key={r.name} reviewer={r} />
+                ))}
+              </span>
+            ) : null}
+            {detail.labels.length > 0 ? (
+              <span className="inline-flex flex-wrap items-center gap-1.5">
+                <span className="mr-0.5">Labels</span>
+                {detail.labels.map((l) => (
+                  <span key={l.name} className="inline-flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-foreground">
+                    <span className="size-2 shrink-0 rounded-full bg-muted-foreground" style={l.color ? { background: `#${l.color}` } : undefined} aria-hidden />
+                    {l.name}
+                  </span>
+                ))}
+              </span>
+            ) : null}
           </div>
         ) : null}
         {detail && (detail.stackedOn || !detail.onDefaultBranch || stackedAbove.length > 0) ? (
@@ -1700,15 +2444,16 @@ export function PrDetailView({
             value={activeTab}
             onChange={setTab}
             options={[
+              { id: "conversation", label: "Overview", icon: "FileText", count: comments },
               { id: "checks", label: "Checks", icon: "CircleCheck", count: detail.checks.length, countTone: failing > 0 ? "bad" : "neutral" },
               { id: "files", label: "Files", icon: "FileDiff", count: detail.changedFiles, countTone: drafts > 0 ? "warn" : "neutral" },
+              { id: "commits", label: "Commits", icon: "GitBranch", count: detail.commitCount, countTone: newCommits > 0 ? "warn" : "neutral" },
               { id: "threads", label: "Comments", icon: "MessageSquare", count: unresolved, countTone: unresolved > 0 ? "bad" : "neutral" },
-              { id: "conversation", label: "Conversation", icon: "UserRound", count: detail.timeline.length },
             ]}
           />
           <div
             ref={arrive}
-            className={cn("min-w-0", activeTab === "files" && files && files.length > 1 && "grid gap-8 @4xl:grid-cols-[15rem_minmax(0,1fr)]")}
+            className={cn("min-w-0", activeTab === "files" && files && files.length > 1 && "grid gap-8 @4xl:grid-cols-[18rem_minmax(0,1fr)]")}
           >
             {activeTab === "files" && files && files.length > 1 ? (
               <nav
@@ -1737,6 +2482,9 @@ export function PrDetailView({
                 onChanged={load}
               />
             ) : null}
+            {activeTab === "commits" ? (
+              <CommitsTab commits={detail.commits} total={detail.commitCount} prUrl={detail.url} myReviewOid={detail.myReviewOid} />
+            ) : null}
             {activeTab === "threads" ? (
               <ThreadsTab
                 threads={detail.threads}
@@ -1748,7 +2496,7 @@ export function PrDetailView({
               />
             ) : null}
             {activeTab === "conversation" ? (
-              <ConversationTab timeline={detail.timeline} prUrl={detail.url} subjectId={detail.id} onPosted={load} />
+              <ConversationTab timeline={detail.timeline} prUrl={detail.url} subjectId={detail.id} body={detail.body} canEdit={detail.canEdit} onPosted={load} />
             ) : null}
             </div>
             </PrContext.Provider>
@@ -1756,5 +2504,6 @@ export function PrDetailView({
         </div>
       )}
     </div>
+    </JiraContext.Provider>
   );
 }

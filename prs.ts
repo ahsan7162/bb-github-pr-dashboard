@@ -34,6 +34,8 @@ export interface Pr {
   updatedAt: string;
   mergedAt: string | null;
   closedAt: string | null;
+  additions: number;
+  deletions: number;
   ci: CiState;
   failingChecks: FailingCheck[];
   unresolvedThreads: number;
@@ -81,6 +83,8 @@ interface RawContext {
 }
 export interface RawPr {
   id?: string;
+  additions?: number;
+  deletions?: number;
   number: number;
   title: string;
   url: string;
@@ -165,6 +169,8 @@ export function toPr(raw: RawPr): Pr {
     updatedAt: raw.updatedAt,
     mergedAt: raw.mergedAt,
     closedAt: raw.closedAt,
+    additions: raw.additions ?? 0,
+    deletions: raw.deletions ?? 0,
     ci: ciState(rollup?.state, checks),
     failingChecks,
     // Threads still in your unsubmitted review are drafts, not open conversations.
@@ -306,6 +312,10 @@ export function latestChecks(contexts: RawContext[]): CheckDetail[] {
 // ---- Detail view ----
 
 export interface Comment {
+  /** GraphQL node id, used to delete; empty for a review summary or the description. */
+  id: string;
+  /** GitHub lets the viewer delete it: in practice, your own comments. */
+  canDelete: boolean;
   author: string;
   avatarUrl: string | null;
   body: string;
@@ -339,6 +349,36 @@ export interface TimelineEntry extends Comment {
   reviewState: string | null;
 }
 
+export interface PrCommit {
+  oid: string;
+  shortOid: string;
+  headline: string;
+  author: string;
+  avatarUrl: string | null;
+  committedDate: string;
+  /** The commit's CI rollup; null when it ran none. */
+  ci: CheckStatus | null;
+}
+
+const ROLLUP: Record<string, CheckStatus> = {
+  SUCCESS: "passing", FAILURE: "failing", ERROR: "failing", PENDING: "pending", EXPECTED: "pending",
+};
+
+export interface Reviewer {
+  /** A login, or a team's name. */
+  name: string;
+  avatarUrl: string | null;
+  team: boolean;
+  /** REQUESTED while their review is still asked for; else their latest review's state. */
+  state: string;
+}
+
+export interface Label {
+  name: string;
+  /** Six hex digits, or null when GitHub sent something else. */
+  color: string | null;
+}
+
 export interface PrDetail {
   /** GraphQL node id, used to comment. */
   id: string;
@@ -369,11 +409,25 @@ export interface PrDetail {
   threads: Thread[];
   /** Failing first, then running, passing, skipped. */
   checks: CheckDetail[];
+  /** Asked-for reviewers first, then everyone else who reviewed; never the author. */
+  reviewers: Reviewer[];
+  labels: Label[];
+  /** The description as Markdown source, for editing. */
+  body: string;
+  /** GitHub lets the viewer edit the title and description. */
+  canEdit: boolean;
+  /** The latest 100 commits, newest first. */
+  commits: PrCommit[];
+  commitCount: number;
+  /** The commit your latest review was on, to mark what came after it. */
+  myReviewOid: string | null;
 }
 
 
 type RawAuthor = { login: string; avatarUrl?: string } | null;
 interface RawComment {
+  id?: string;
+  viewerCanDelete?: boolean;
   author: RawAuthor;
   body: string;
   createdAt: string;
@@ -428,10 +482,34 @@ export interface RawDetail {
   commits: {
     nodes: { commit: { statusCheckRollup: { contexts: { nodes: RawContext[] } } | null } }[];
   };
+  viewerLatestReview?: { commit: { oid: string } | null } | null;
+  viewerCanUpdate?: boolean;
+  labels?: { nodes: { name: string; color: string }[] };
+  latestReviews?: { nodes: { author: RawAuthor; state: string }[] };
+  reviewRequests?: {
+    nodes: {
+      requestedReviewer: { __typename: string; login?: string; name?: string; avatarUrl?: string | null } | null;
+    }[];
+  };
+  history?: {
+    totalCount: number;
+    nodes: {
+      commit: {
+        oid: string;
+        abbreviatedOid: string;
+        messageHeadline: string;
+        committedDate: string;
+        statusCheckRollup: { state: string } | null;
+        author: { name: string | null; avatarUrl?: string | null; user: { login: string } | null } | null;
+      };
+    }[];
+  };
 }
 
 const login = (a: RawAuthor) => a?.login ?? "ghost";
 const comment = (c: RawComment): Comment => ({
+  id: c.id ?? "",
+  canDelete: c.viewerCanDelete ?? false,
   author: login(c.author),
   avatarUrl: c.author?.avatarUrl ?? null,
   body: c.body,
@@ -439,6 +517,18 @@ const comment = (c: RawComment): Comment => ({
   url: c.url,
 });
 const CHECK_ORDER: Record<CheckStatus, number> = { failing: 0, pending: 1, passing: 2, skipped: 3 };
+
+function reviewersOf(raw: RawDetail, author: string): Reviewer[] {
+  const requested: Reviewer[] = (raw.reviewRequests?.nodes ?? []).flatMap(({ requestedReviewer: r }) => {
+    const name = r?.login ?? r?.name;
+    return name ? [{ name, avatarUrl: r?.avatarUrl ?? null, team: r?.__typename === "Team", state: "REQUESTED" }] : [];
+  });
+  const asked = new Set(requested.map((r) => r.name));
+  const reviewed: Reviewer[] = (raw.latestReviews?.nodes ?? [])
+    .filter((r) => r.author && r.author.login !== author && !asked.has(r.author.login))
+    .map((r) => ({ name: r.author!.login, avatarUrl: r.author!.avatarUrl ?? null, team: false, state: r.state }));
+  return [...requested, ...reviewed];
+}
 
 export function toDetail(raw: RawDetail, viewer = ""): PrDetail {
   const author = login(raw.author);
@@ -463,12 +553,14 @@ export function toDetail(raw: RawDetail, viewer = ""): PrDetail {
   const timeline: TimelineEntry[] = [
     ...(raw.body.trim() === ""
       ? []
-      : [{ ...comment(raw), reviewState: null }]),
+      : [{ ...comment(raw), id: "", canDelete: false, reviewState: null }]),
     ...raw.comments.nodes.map((c) => ({ ...comment(c), reviewState: null })),
     ...raw.reviews.nodes
       // A bare COMMENTED review only wraps thread comments, shown under threads.
       .filter((r) => r.submittedAt !== null && (r.body.trim() !== "" || r.state !== "COMMENTED"))
       .map((r) => ({
+        id: "",
+        canDelete: false,
         author: login(r.author),
         avatarUrl: r.author?.avatarUrl ?? null,
         body: r.body,
@@ -502,6 +594,23 @@ export function toDetail(raw: RawDetail, viewer = ""): PrDetail {
     // Array sort is stable, so GitHub's order survives within each group.
     threads: threads.sort((a, b) => Number(a.isResolved) - Number(b.isResolved)),
     checks: latestChecks(contexts).sort((a, b) => CHECK_ORDER[a.status] - CHECK_ORDER[b.status]),
+    commits: (raw.history?.nodes ?? [])
+      .map(({ commit: c }) => ({
+        oid: c.oid,
+        shortOid: c.abbreviatedOid,
+        headline: c.messageHeadline,
+        author: c.author?.user?.login ?? c.author?.name ?? "unknown",
+        avatarUrl: c.author?.avatarUrl ?? null,
+        committedDate: c.committedDate,
+        ci: c.statusCheckRollup ? (ROLLUP[c.statusCheckRollup.state] ?? null) : null,
+      }))
+      .reverse(),
+    commitCount: raw.history?.totalCount ?? 0,
+    reviewers: reviewersOf(raw, author),
+    labels: (raw.labels?.nodes ?? []).map((l) => ({ name: l.name, color: /^[0-9a-f]{6}$/i.test(l.color) ? l.color : null })),
+    body: raw.body,
+    canEdit: raw.viewerCanUpdate ?? false,
+    myReviewOid: raw.viewerLatestReview?.commit?.oid ?? null,
   };
 }
 
@@ -890,7 +999,7 @@ export interface AgentThread {
 export function agentTarget(
   pr: { url: string; repo: string; headRefName: string },
   threads: readonly AgentThread[],
-  projects: readonly { id: string; gitRemoteUrl: string | null }[],
+  projects: readonly { id: string; gitRemoteUrl: string | null; name?: string }[],
   prUrlByEnvironment: Readonly<Record<string, string>>,
 ): { thread: { id: string; title: string } | null; projectId: string | null } {
   const repo = pr.repo.toLowerCase();
@@ -904,6 +1013,139 @@ export function agentTarget(
     .sort((a, b) => b.updatedAt - a.updatedAt)[0];
   return {
     thread: owner ? { id: owner.id, title: owner.title ?? owner.titleFallback ?? "the PR's thread" } : null,
-    projectId: projects.find((p) => remotes.get(p.id) === repo)?.id ?? null,
+    projectId: projectFor(pr.repo, projects),
   };
+}
+
+const squash = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/**
+ * The bb project a PR belongs to: the one whose git remote is the repo; else one named like the repo
+ * ("Billing API" for acme/billing-api); else one whose name contains it or is contained in it.
+ */
+export function projectFor(repo: string, projects: readonly { id: string; gitRemoteUrl: string | null; name?: string }[]): string | null {
+  const lower = repo.toLowerCase();
+  const byRemote = projects.find((p) => repoOfRemote(p.gitRemoteUrl) === lower);
+  if (byRemote) return byRemote.id;
+  const name = squash(repo.split("/")[1] ?? repo);
+  if (name.length < 3) return null;
+  const named = projects.filter((p) => p.name);
+  const exact = named.find((p) => squash(p.name!) === name);
+  if (exact) return exact.id;
+  // Only a single close match counts: two candidates means guessing.
+  const close = named.filter((p) => {
+    const n = squash(p.name!);
+    return n.length >= 4 && (n.includes(name) || name.includes(n));
+  });
+  return close.length === 1 ? close[0]!.id : null;
+}
+
+/** Threads to offer under "Link to thread": the PR's branch thread, then its project's, then the rest, newest first. */
+export function linkCandidates(
+  threads: readonly AgentThread[],
+  projects: readonly { id: string; name?: string }[],
+  target: { thread: { id: string } | null; projectId: string | null },
+  limit = 60,
+): { id: string; title: string; project: string; updatedAt: number }[] {
+  const names = new Map(projects.map((p) => [p.id, p.name ?? ""]));
+  const rank = (t: AgentThread) => (t.id === target.thread?.id ? 0 : t.projectId === target.projectId ? 1 : 2);
+  return threads
+    .filter((t) => t.archivedAt === null)
+    .sort((a, b) => rank(a) - rank(b) || b.updatedAt - a.updatedAt)
+    .slice(0, limit)
+    .map((t) => ({ id: t.id, title: t.title ?? t.titleFallback ?? "Untitled thread", project: names.get(t.projectId) ?? "", updatedAt: t.updatedAt }));
+}
+
+type PromptPr = Pick<PrDetail, "url" | "repo" | "title" | "headRefName" | "baseRefName" | "author">;
+const about = (pr: PromptPr) =>
+  `Pull request ${pr.url}: "${pr.title}" (${pr.repo}, \`${pr.headRefName}\` into \`${pr.baseRefName}\`, by @${pr.author}).`;
+
+/** Starting prompts for the PR menu's thread actions. */
+export const prPrompts = {
+  link: (pr: PromptPr) => `${about(pr)}\n\nLinking this pull request to this thread for context. No action needed yet.`,
+  ask: (pr: PromptPr) => `${about(pr)}\n\nQuestion: `,
+  explain: (pr: PromptPr) =>
+    `${about(pr)}\n\nExplain this pull request. Read its description and diff (\`gh pr view\`, \`gh pr diff\`), then walk me through the change in a sensible reading order: what it does, why, and how the pieces fit. Point out what deserves a close read: risky logic, edge cases, missing tests, anything surprising.`,
+};
+
+/** Every unresolved review thread and failed job in one prompt; each section is what its own Fix with agent would send. */
+export function findingsPrompt(pr: PromptPr, subjects: readonly FixSubject[]): string {
+  const sections = subjects.map((s, i) => {
+    // fixPrompt is [head, "", ...body, "", instruction]: keep the body.
+    const body = fixPrompt(pr, s).split("\n").slice(2, -2);
+    return [`### ${i + 1}. ${s.kind === "thread" ? "Review comment" : "Failed CI job"}`, ...body].join("\n");
+  });
+  return [
+    about(pr),
+    "",
+    `Fix what is blocking it on branch \`${pr.headRefName}\`:`,
+    "",
+    sections.join("\n\n"),
+    "",
+    "Work through them in order. If a review comment is wrong, say why instead of changing the code. Finish with a short summary of what you changed.",
+  ].join("\n");
+}
+
+// ---- Jira links ----
+
+const JIRA_URL = /^https?:\/\/[\w.-]+\.atlassian\.net\/browse\/([A-Z][A-Z0-9]{1,9}-\d+)\/?(?:[?#]\S*)?$/;
+const JIRA_SITE = /(https?:\/\/[\w.-]+\.atlassian\.net)\/browse\/[A-Z][A-Z0-9]{1,9}-\d+/;
+
+/** Jira project prefixes this PR names (title, branch, Jira URLs), so `UTF-8` or `SHA-256` never become links. */
+export function jiraPrefixes(...texts: string[]): Set<string> {
+  const prefixes = new Set<string>();
+  for (const text of texts) {
+    for (const m of text.matchAll(/(?:^|[^A-Za-z0-9])([A-Z][A-Z0-9]{1,9})-\d+(?![A-Za-z0-9])/g)) {
+      const bracketed = new RegExp(`\\[${m[1]}-\\d+\\]|/browse/${m[1]}-\\d+|(?:^|/)${m[1]}-\\d+(?:/|$)`).test(text);
+      if (bracketed) prefixes.add(m[1]!);
+    }
+  }
+  return prefixes;
+}
+
+/** The Jira site a PR links to, from the first Jira issue URL in it. */
+export function jiraSite(...texts: string[]): string | null {
+  for (const t of texts) {
+    const m = t.match(JIRA_SITE);
+    if (m) return m[1]!;
+  }
+  return null;
+}
+
+/** Where a Jira issue key opens: My Jira's ticket page when it runs, else the issue on its site; null when neither is known. */
+export function jiraHref(key: string, target: { plugin: boolean; siteUrl: string | null }): string | null {
+  if (target.plugin) return `/plugins/my-jira/tickets/${key}`;
+  return target.siteUrl ? `${target.siteUrl.replace(/\/+$/, "")}/browse/${key}` : null;
+}
+
+/**
+ * Markdown with its Jira issues linked: bare keys of the given prefixes become links, and Jira issue URLs
+ * point at My Jira when it runs. Code, and text already inside a link, stay as they are.
+ */
+export function linkJira(markdown: string, prefixes: ReadonlySet<string>, href: (key: string) => string | null, plugin: boolean): string {
+  const token = /(```[\s\S]*?```|`[^`\n]*`|\[[^\]\n]*\]\([^)\s]*\)|<https?:[^>\s]+>|https?:\/\/[^\s)<>\]]+)/g;
+  const keys = prefixes.size > 0 ? new RegExp(`(^|[^A-Za-z0-9/_-])((?:${[...prefixes].join("|")})-\\d+)(?![A-Za-z0-9_-])`, "g") : null;
+  const plain = (text: string) =>
+    keys ? text.replace(keys, (all, pre: string, key: string) => {
+      const to = href(key);
+      return to ? `${pre}[${key}](${to})` : all;
+    }) : text;
+  let out = "";
+  let last = 0;
+  for (const m of markdown.matchAll(token)) {
+    out += plain(markdown.slice(last, m.index));
+    const t = m[0];
+    if (plugin && t.startsWith("[")) {
+      const url = t.slice(t.indexOf("](") + 2, -1);
+      const key = url.match(JIRA_URL)?.[1];
+      out += key ? `${t.slice(0, t.indexOf("](") + 2)}${href(key)})` : t;
+    } else if (plugin && !t.startsWith("`")) {
+      const key = t.replace(/^<|>$/g, "").match(JIRA_URL)?.[1];
+      out += key ? `[${key}](${href(key)})` : t;
+    } else {
+      out += t;
+    }
+    last = m.index! + t.length;
+  }
+  return out + plain(markdown.slice(last));
 }

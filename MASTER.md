@@ -12,7 +12,7 @@ PR and comment thread; bb's sans throughout with no new display face, PR titles 
 roomy spacing on a 4px base (16px inside rows, 24px between groups, 32px between sections) with
 hairline dividers instead of boxes inside boxes; flat components one border deep, one radius scale
 (6px controls, 10px panels, full for pills and avatars), no shadows at rest; and a PR page where
-Checks, Files, Comments and Conversation are tabs, with a sticky file list beside the diff in
+Overview, Checks, Files, Commits and Comments are tabs, with a sticky file list beside the diff in
 Files, so any file or comment is one click away.
 
 *Amended 2026-10-30 at the user's request: the first build put checks, files, comments and the
@@ -129,7 +129,7 @@ jumps scroll instantly. Loops only for real loading (refresh spinner, skeleton).
 ## Navigation
 
 - **PR page:** header band (back, state, `repo#n`, title, branches, blockers as the headline),
-  then the tabs Checks, Files, Comments and Conversation at every width, each its own view.
+  then the tabs Overview, Checks, Files, Commits and Comments at every width, each its own view.
 - **Files tab:** from the `@4xl` container width, a sticky 15rem file list beside the diff (name
   first, directory muted, open-comment count, +lines), shown when the PR changes two or more files.
   Narrower, the diff takes the full width.
@@ -141,7 +141,7 @@ jumps scroll instantly. Loops only for real loading (refresh spinner, skeleton).
   one; coming back from a PR restores the scroll position and focuses that row.
 - **Between PRs:** Previous and Next in the PR header (and `[` `]`) walk the list as last shown,
   with its filters and folds.
-- **Kept as is:** section names (Checks, Files, Comments, Conversation, All PRs), the route
+- **Kept as is:** section names (Overview, Checks, Files, Commits, Comments, All PRs), the route
   `prs/<owner>/<repo>/<number>`, the saved diff layout key, and landing on failing checks first,
   then unresolved comments, else the conversation.
 
