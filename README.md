@@ -43,7 +43,8 @@ login (`gh auth login`) or a token; see [Requirements](#requirements).
   in My PRs, or on GitHub if My PRs cannot load it. Cmd/Ctrl-click and "Open on
   GitHub" links still go to GitHub.
 
-<img width="2560" height="1720" alt="list" src="https://github.com/user-attachments/assets/31c3a539-9bb1-4e09-b641-3ea2aa8b9f7b" />
+<!-- SCREENSHOT 1-list.png: the Open tab: PRs grouped by repo with blockers, totals and new alerts. In GitHub's web editor, drag ~/Downloads/pr-dashboard-v0.3.2-screenshots/1-list.png onto the blank line below, then delete this comment. -->
+
 
 ## The list
 
@@ -60,7 +61,8 @@ login (`gh auth login`) or a token; see [Requirements](#requirements).
   ready to merge) and a "New since you last looked" list of alerts.
 - Coming back from a pull request returns you to where you were in the list.
 
-<img width="2560" height="1720" alt="filters" src="https://github.com/user-attachments/assets/ff92da4d-2440-443e-ac2b-cf756dfb93e1" />
+<!-- SCREENSHOT 8-reviewed.png: the Reviewed tab: a PR with new commits since you approved, in amber. In GitHub's web editor, drag ~/Downloads/pr-dashboard-v0.3.2-screenshots/8-reviewed.png onto the blank line below, then delete this comment. -->
+
 
 ## A pull request
 
@@ -68,6 +70,8 @@ The header shows its state, its branches (click one to copy its name), lines add
 and removed, its reviewers with each one's verdict (or that a review is still
 requested), its labels, where it sits in a stack, and its blockers as the headline. A pencil
 beside the title edits it, when GitHub lets you. **Previous** and **Next** step through the list as you left it.
+
+<!-- SCREENSHOT 2-overview.png: a pull request: header with reviewers, labels and blockers; the Overview tab. In GitHub's web editor, drag ~/Downloads/pr-dashboard-v0.3.2-screenshots/2-overview.png onto the blank line below, then delete this comment. -->
 
 - **Overview** (first): the description in its own panel, with a pencil to edit it,
   then the comments and reviews in order, as Markdown, with a box for your own comment.
@@ -83,7 +87,10 @@ beside the title edits it, when GitHub lets you. **Previous** and **Next** step 
 - On your own pull request, mark a draft **Ready for review** or **Convert to draft**; **close** an open pull
   request (with a confirm step) or **reopen** a closed one.
 
-<img width="2560" height="1720" alt="checks" src="https://github.com/user-attachments/assets/dff59c2c-53ee-4fa4-bd0d-055b29818324" />
+<!-- SCREENSHOT 3-files.png: the Files tab: file list beside the diff, a review thread under its line. In GitHub's web editor, drag ~/Downloads/pr-dashboard-v0.3.2-screenshots/3-files.png onto the blank line below, then delete this comment. -->
+
+<!-- SCREENSHOT 4-commits.png: the Commits tab: every commit with its CI result. In GitHub's web editor, drag ~/Downloads/pr-dashboard-v0.3.2-screenshots/4-commits.png onto the blank line below, then delete this comment. -->
+
 
 ### Fix with agent
 
@@ -97,8 +104,11 @@ log link.
   goes to that thread (queued if it is busy) and a toast links to it. The newest such
   thread wins. bb's GitHub PR Status confirms the environment's pull request when it
   knows it; otherwise the project's git remote has to match the repository.
-- Otherwise bb's New thread screen opens with the prompt filled in, in the project whose
-  git remote is the repository when there is one, so you choose where it runs.
+- Otherwise bb's New thread screen opens with the prompt filled in, in the
+  pull request's project (see below), so you choose where it runs.
+
+<!-- SCREENSHOT 5-checks.png: the Checks tab: failing jobs with their errors and Fix with agent. In GitHub's web editor, drag ~/Downloads/pr-dashboard-v0.3.2-screenshots/5-checks.png onto the blank line below, then delete this comment. -->
+
 
 ### The ⋯ menu
 
@@ -111,6 +121,9 @@ log link.
 
 New threads start in the pull request's project: the one whose git remote is the repository, else one named like it
 (`Billing API` for `acme/billing-api`), but never a guess between two.
+
+<!-- SCREENSHOT 7-menu.png: the ⋯ menu open on a pull request. In GitHub's web editor, drag ~/Downloads/pr-dashboard-v0.3.2-screenshots/7-menu.png onto the blank line below, then delete this comment. -->
+
 
 ### Jira
 
@@ -126,7 +139,7 @@ finish it as **Comment**, **Approve** or **Request changes**, or discard it. Rep
 any thread where it is, and delete your own comments and replies (after a confirm
 step) from the trash button beside them. Nothing is written to GitHub until you click.
 
-<img width="2560" height="1720" alt="review" src="https://github.com/user-attachments/assets/6d004fa5-5794-4d52-8ba8-b577239a86fb" />
+<!-- SCREENSHOT 6-comments.png: the Comments tab: an unresolved thread with replies, Reply and Fix with agent. In GitHub's web editor, drag ~/Downloads/pr-dashboard-v0.3.2-screenshots/6-comments.png onto the blank line below, then delete this comment. -->
 
 
 ## Keyboard
