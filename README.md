@@ -3,12 +3,10 @@
 
 See why each pull request is stuck, and get it unstuck, without leaving [bb](https://getbb.app).
 
-https://github.com/user-attachments/assets/14e2303b-f8a5-4c6f-998b-6c0431eae648
 
-<sub>A 60-second tour with sample data. Music: "Happy Beats & Business Moves Vol. 1" by Sascha Ende,
-[ende.app](https://ende.app/en/song/12866-happy-beats-business-moves-vol-1),
-[CC BY 4.0](https://ende.app/en/standard-license). Sound effects:
-[Kenney](https://kenney.nl), CC0.</sub>
+
+https://github.com/user-attachments/assets/fffbf9cf-a736-4072-aa56-5df9be84210c
+
 
 ```
 bb plugin install git:https://github.com/ahsan7162/bb-github-pr-dashboard.git@^0.3.0
