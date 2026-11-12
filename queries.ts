@@ -74,7 +74,7 @@ export const PR_DETAIL_QUERY = `query($owner: String!, $name: String!, $number: 
     author { login avatarUrl(size: 64) } headRefName baseRefName reviewDecision mergeable
     repository { nameWithOwner defaultBranchRef { name } } ${STACK}
     reviewThreads(first: 100) { nodes {
-      id isResolved isOutdated path line originalLine startLine diffSide resolvedBy { login }
+      id isResolved isOutdated viewerCanResolve viewerCanUnresolve path line originalLine startLine diffSide resolvedBy { login }
       comments(first: 50) { nodes { ${COMMENT} diffHunk state } }
     } }
     pendingReview: reviews(states: PENDING, first: 1) { nodes { id } }
@@ -127,6 +127,10 @@ export const REPLY_MUTATION = `mutation($threadId: ID!, $body: String!) {
   addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
     comment { url state }
   }
+}`;
+
+export const resolveThreadMutation = (resolve: boolean) => `mutation($threadId: ID!) {
+  ${resolve ? "resolveReviewThread" : "unresolveReviewThread"}(input: { threadId: $threadId }) { thread { isResolved } }
 }`;
 
 export const COMMENT_MUTATION = `mutation($subjectId: ID!, $body: String!) {

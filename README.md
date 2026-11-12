@@ -140,7 +140,7 @@ running, or on your Jira site otherwise.
 Press **+** on a line, or select line numbers (Shift-click or drag for a range), to
 comment. Post a single comment, or start a review that only you can see until you
 finish it as **Comment**, **Approve** or **Request changes**, or discard it. Reply to
-any thread where it is, and delete your own comments and replies (after a confirm
+any thread where it is, **Resolve** or **Unresolve** it when GitHub lets you, and delete your own comments and replies (after a confirm
 step) from the trash button beside them. Nothing is written to GitHub until you click.
 
 <img width="2880" height="1800" alt="6-comments" src="https://github.com/user-attachments/assets/ce54e487-9e7e-4b9b-9680-a0b4e2372a97" />
@@ -202,7 +202,7 @@ list does not mute its alerts.
   ```
 
   A classic token needs `repo`. A fine-grained one needs Pull requests read and
-  write (write only for comments, replies, deletes, reviews, edits, ready or draft, close and reopen) and Checks read.
+  write (write only for comments, replies, resolving threads, deletes, reviews, edits, ready or draft, close and reopen) and Checks read.
   For organizations that enforce SAML SSO, authorize the token for them, or their
   pull requests are left out.
 - Alerts run while the bb server runs. Desktop notifications need bb's Push

@@ -337,6 +337,8 @@ export interface Thread {
   isResolved: boolean;
   isOutdated: boolean;
   resolvedBy: string | null;
+  /** GitHub lets the viewer resolve it (or unresolve it, once resolved). */
+  canToggleResolved: boolean;
   /** Last lines of the diff the thread is attached to. */
   diffHunk: string | null;
   comments: Comment[];
@@ -462,6 +464,8 @@ export interface RawDetail {
       startLine?: number | null;
       isResolved: boolean;
       isOutdated: boolean;
+      viewerCanResolve?: boolean;
+      viewerCanUnresolve?: boolean;
       path: string;
       line: number | null;
       originalLine: number | null;
@@ -545,6 +549,7 @@ export function toDetail(raw: RawDetail, viewer = ""): PrDetail {
       isResolved: t.isResolved,
       isOutdated: t.isOutdated,
       resolvedBy: t.resolvedBy ? login(t.resolvedBy) : null,
+      canToggleResolved: !!(t.isResolved ? t.viewerCanUnresolve : t.viewerCanResolve),
       diffHunk: hunk ? hunk.split("\n").slice(-8).join("\n") : null,
       comments,
       awaitingReply: !t.isResolved && comments.at(-1)?.author !== author,

@@ -54,6 +54,7 @@ import {
   historyQuery,
   PR_DETAIL_QUERY,
   REPLY_MUTATION,
+  resolveThreadMutation,
   WATCH_QUERY,
 } from "./queries";
 
@@ -146,6 +147,7 @@ const detailSchema = z.object({
       isResolved: z.boolean(),
       isOutdated: z.boolean(),
       resolvedBy: z.string().nullable(),
+      canToggleResolved: z.boolean(),
       diffHunk: z.string().nullable(),
       comments: z.array(commentSchema),
       awaitingReply: z.boolean(),
@@ -254,6 +256,10 @@ export const rpcContract = defineRpcContract({
   pr_reply: {
     input: z.object({ threadId: nodeId, body: commentBody }).strict(),
     output: z.object({ url: z.string(), pending: z.boolean() }),
+  },
+  pr_resolve_thread: {
+    input: z.object({ threadId: nodeId, resolved: z.boolean() }).strict(),
+    output: z.object({ resolved: z.boolean() }),
   },
   pr_delete_comment: {
     input: z.object({ id: nodeId, kind: z.enum(["issue", "review"]) }).strict(),
@@ -673,6 +679,13 @@ export default async function plugin(bb: BbPluginApi) {
       if (accounts.find((a) => a.active)?.login === login) await bb.storage.kv.delete("account");
       else await bb.storage.kv.set("account", login);
       return { selected: login };
+    },
+    pr_resolve_thread: async ({ threadId, resolved }) => {
+      type Result = { thread: { isResolved: boolean } | null } | null;
+      const data = await graphql<Record<string, Result>>(resolveThreadMutation(resolved), { threadId }, { mutation: true });
+      const thread = Object.values(data)[0]?.thread;
+      if (!thread) throw new Error("GitHub did not update the thread");
+      return { resolved: thread.isResolved };
     },
     pr_delete_comment: async ({ id, kind }) => {
       await graphql(kind === "issue" ? DELETE_ISSUE_COMMENT_MUTATION : DELETE_REVIEW_COMMENT_MUTATION, { id }, { mutation: true });

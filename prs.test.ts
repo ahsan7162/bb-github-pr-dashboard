@@ -94,11 +94,11 @@ const rawDetail: RawDetail = {
   createdAt: "2026-10-01T00:00:00Z", body: "Description", author: me, headRefName: "feat", baseRefName: "main",
   reviewDecision: "CHANGES_REQUESTED", mergeable: "MERGEABLE", repository: { nameWithOwner: "o/r" },
   reviewThreads: { nodes: [
-    { isResolved: true, isOutdated: false, path: "a.go", line: 1, originalLine: 1, resolvedBy: me,
+    { isResolved: true, isOutdated: false, viewerCanUnresolve: true, path: "a.go", line: 1, originalLine: 1, resolvedBy: me,
       comments: { nodes: [c("rev", "2026-10-02T00:00:00Z"), c("me", "2026-10-03T00:00:00Z")] } },
     { isResolved: false, isOutdated: true, path: "b.go", line: null, originalLine: 7, resolvedBy: null,
       comments: { nodes: [c("rev", "2026-10-02T00:00:00Z"), c("me", "2026-10-03T00:00:00Z")] } },
-    { isResolved: false, isOutdated: false, path: "c.go", line: 4, originalLine: 4, resolvedBy: null,
+    { isResolved: false, isOutdated: false, viewerCanUnresolve: true, path: "c.go", line: 4, originalLine: 4, resolvedBy: null,
       comments: { nodes: [{ ...c("rev", "2026-10-02T00:00:00Z"), diffHunk: "@@ x\n-a\n+b" }] } },
   ] },
   comments: { nodes: [c("bot", "2026-10-05T00:00:00Z")] },
@@ -121,6 +121,8 @@ test("detail: unresolved threads first, who has the last word, and the timeline"
   ]);
   assert.equal(d.threads[0]!.line, 7); // outdated: falls back to the original line
   assert.equal(d.threads[1]!.diffHunk, "@@ x\n-a\n+b");
+  // The permission that matters follows the state: resolve while open, unresolve once resolved.
+  assert.deepEqual(d.threads.map((t) => t.canToggleResolved), [false, false, true]);
   // Description, the CHANGES_REQUESTED review, then the comment; the bare COMMENTED review is dropped.
   assert.deepEqual(d.timeline.map((t) => [t.author, t.reviewState]), [
     ["me", null],
@@ -378,7 +380,7 @@ const fixPr = { url: "https://github.com/o/r/pull/7", repo: "o/r", headRefName: 
 test("fix prompt for a review thread: where, who, every reply, and a fence the bot's code block cannot close", () => {
   const thread: Thread = {
     id: "T1", path: "deploy/service.yaml", side: "LEFT", startLine: 98, line: 100, isPending: false,
-    isResolved: false, isOutdated: false, resolvedBy: null, diffHunk: null, awaitingReply: true,
+    isResolved: false, isOutdated: false, resolvedBy: null, canToggleResolved: false, diffHunk: null, awaitingReply: true,
     comments: [
       { author: "review-helper[bot]", avatarUrl: null, body: "Use a list:\n```yaml\na: [1]\n```", createdAt: "", url: "https://github.com/o/r/pull/7#c1" },
       { author: "me", avatarUrl: null, body: "Why?", createdAt: "", url: "https://github.com/o/r/pull/7#c2" },

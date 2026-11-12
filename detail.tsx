@@ -1058,6 +1058,19 @@ function ThreadCard({
 }) {
   const rpc = useRpc<typeof rpcContract>();
   const [replying, setReplying] = useState(false);
+  const [toggling, setToggling] = useState(false);
+  const toggleResolved = async () => {
+    setToggling(true);
+    try {
+      const { resolved } = await rpc.call("pr_resolve_thread", { threadId: thread.id, resolved: !thread.isResolved });
+      toast.success(resolved ? "Thread resolved" : "Thread reopened");
+      onPosted();
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setToggling(false);
+    }
+  };
   const pill = {
     resolved: (
       <Pill tone="good" icon="CircleCheck">
@@ -1148,6 +1161,12 @@ function ThreadCard({
               <Button size="sm" variant="outline" onClick={() => setReplying(true)}>
                 <Icon name="ArrowTurnBackward" className="size-3.5" />
                 Reply
+              </Button>
+            ) : null}
+            {thread.id && !thread.isPending && thread.canToggleResolved ? (
+              <Button size="sm" variant="outline" disabled={toggling} onClick={() => void toggleResolved()}>
+                <Icon name={thread.isResolved ? "RotateCcw" : "CircleCheck"} className="size-3.5" />
+                {toggling ? (thread.isResolved ? "Unresolving…" : "Resolving…") : thread.isResolved ? "Unresolve" : "Resolve"}
               </Button>
             ) : null}
             {!thread.isResolved ? <FixWithAgent subject={{ kind: "thread", thread }} /> : null}

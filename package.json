@@ -1,6 +1,6 @@
 {
   "name": "bb-github-pr-dashboard",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "type": "module",
   "engines": {
     "bb": ">=0.48",
