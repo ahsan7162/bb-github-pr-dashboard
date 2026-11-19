@@ -29,8 +29,8 @@ login (`gh auth login`) or a token; see [Requirements](#requirements).
   or waiting on a review. A coloured stripe shows the worst one at a glance.
 - **Fix it from bb.** Read the failing checks, walk the changed files with review
   threads under their lines, reply, comment on a line or a range, submit a review,
-  mark it ready for review, and close or reopen it. Or hand a review comment or a failed job to
-  an agent with **Fix with agent**.
+  mark it ready for review, and close or reopen it. Or pick review comments and failed
+  jobs with **Fix with agent** and send them to an agent as one prompt.
 - **Find anything in a long queue.** Search, hide repositories, fold groups, and
   reach your whole Merged and Closed history.
 - **Move by keyboard.** From the list to a pull request, between its files and
@@ -98,10 +98,18 @@ beside the title edits it, when GitHub lets you. **Previous** and **Next** step 
 ### Fix with agent
 
 Every unresolved review thread (in Comments and under its line in Files) and every
-failed job in Checks has a **Fix with agent** button. It writes a prompt with the pull
-request's link, repository and branch, then either the file, line or range, the comment
-with every reply and who wrote each, or the job's name, its error annotations and its
-log link.
+failed job in Checks has a **Fix with agent** button. A click picks that finding (the
+button shows a tick; click again to unpick it). While anything is picked, a bar under
+every tab reads "3 to fix" with **Send to agent** and **Clear**. Picks stay while you
+switch tabs, and clear when you send them or move to another pull request.
+
+**Send to agent** writes one prompt with the pull request's link, repository and branch,
+then each picked finding in the pull request's order: for a review comment, the file,
+line or range and the comment with every reply and who wrote each; for a failed job, its
+name, its error annotations and its log link. The agent is asked to work through them in
+order, say why if a comment is wrong instead of changing the code, and finish with a
+short summary. A thread in your pending review can't be picked, so its button sends it
+at once.
 
 - If a bb thread is working on the pull request's branch in its repository, the prompt
   goes to that thread (queued if it is busy) and a toast links to it. The newest such
@@ -119,8 +127,8 @@ log link.
 - **Link to thread**: pick any bb thread (the PR's branch thread and its project's threads come first) and send it
   the pull request's link, title and branches as context.
 - **Ask a question** and **Explain this PR** open New thread with the pull request filled in.
-- **Fix findings in a thread** sends every unresolved review thread and failed job at once, the way Fix with agent
-  sends one.
+- **Fix findings in a thread** sends every unresolved review thread and failed job at once, the way Send to agent
+  sends the ones you picked.
 - **Open on GitHub**, **Copy link**, **Copy PR number**, and **Close pull request** (with a confirm step).
 
 New threads start in the pull request's project: the one whose git remote is the repository, else one named like it
@@ -214,13 +222,13 @@ list does not mute its alerts.
 Requests go to GitHub only for what you open, all from the bb server: one GraphQL
 request for the tab you open (with every tab's count), one for a pull request, one
 REST request when you open its Files tab, the Merged or Closed history only when you
-search or filter it, and one per alert check. **Fix with agent** asks bb, not GitHub, which thread is on the
+search or filter it, and one per alert check. **Send to agent** asks bb, not GitHub, which thread is on the
 branch (bb's GitHub PR Status may check with GitHub). Alerts and their state stay in this
 plugin's storage on your bb server. Desktop notifications hand each alert's headline
 (repository, number, who) and pull request title to bb's Push notifications plugin,
 which forwards them to registered phones through its push relay (Expo by default);
-turn `showDesktop` off to keep them on the server. The page loads 130 KB of script and 103 KB of CSS
-(31 KB and 10 KB gzipped); an install takes about 11 MB on disk.
+turn `showDesktop` off to keep them on the server. The page loads 105 KB of script and 131 KB of CSS
+(32 KB and 10 KB gzipped); an install takes about 11 MB on disk.
 
 ## Develop
 

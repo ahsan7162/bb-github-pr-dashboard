@@ -18,7 +18,7 @@ A **My PRs** page in the bb navigation rail for every pull request (PR) you are 
 - **Files**: a file list beside the diff, syntax highlighting inline or side by side, and threads under their lines. Press + or select line numbers (Shift-click or drag for a range) to comment; post one comment or start a private review and finish it as Comment, Approve or Request changes. j and k move between files, n and p between unresolved comments.
 - **Commits** with CI, marking those since your review.
 - **Comments**: unresolved first, each with its diff, every reply, who it waits on, and Show in diff. Reply, resolve or unresolve, or delete your own.
-- **Fix with agent** on each unresolved thread and failed job sends the comment or job errors to the bb thread on the PR's branch, or a filled-in New thread in its project (matched by git remote or name).
+- **Fix with agent** on each unresolved thread and failed job picks it; a bar under every tab sends the picked comments and job errors as one prompt to the bb thread on the PR's branch, or a filled-in New thread in its project (matched by git remote or name).
 - A menu to link the PR to a thread, ask about it, explain it, fix all findings, copy it or close it.
 - Jira keys open in bb's My Jira plugin when it runs, else on your Jira site.
 - Mark your draft Ready for review (or back), close an open PR (with a confirm step), or reopen one.
