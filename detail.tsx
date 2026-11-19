@@ -270,24 +270,21 @@ function FixWithAgent({ subject }: { subject: FixSubject }) {
       setBusy(false);
     }
   };
-  const fix = (
-    <Button size="sm" variant="outline" onClick={run} disabled={busy}>
-      <Glyph name="fix" className="size-3.5" />
+  const key = subjectKey(subject);
+  // Drafts and id-less threads can't be batched (fixSubjects leaves them out), so they still send at once.
+  const batchable = !!batch && fixSubjects(pr).some((s) => subjectKey(s) === key);
+  const added = batchable && batch.keys.includes(key);
+  return (
+    <Button
+      size="sm"
+      variant={added ? "secondary" : "outline"}
+      aria-pressed={batchable ? added : undefined}
+      onClick={batchable ? () => batch.toggle(key) : run}
+      disabled={busy}
+    >
+      {added ? <Icon name="CircleCheck" className="size-3.5" /> : <Glyph name="fix" className="size-3.5" />}
       Fix with agent
     </Button>
-  );
-  const key = subjectKey(subject);
-  // Drafts and id-less threads can't be batched: fixSubjects leaves them out, so the bar could never send them.
-  if (!batch || !fixSubjects(pr).some((s) => subjectKey(s) === key)) return fix;
-  const added = batch.keys.includes(key);
-  return (
-    <>
-      {fix}
-      <Button size="sm" variant={added ? "secondary" : "ghost"} aria-pressed={added} onClick={() => batch.toggle(key)}>
-        {added ? <Icon name="CircleCheck" className="size-3.5" /> : null}
-        {added ? "Added" : "Add to batch"}
-      </Button>
-    </>
   );
 }
 
@@ -308,10 +305,10 @@ function BatchBar({ pr, keys, onClear }: { pr: PrDetail; keys: string[]; onClear
   };
   return (
     <div className="sticky bottom-3 z-10 mx-auto flex w-fit items-center gap-2 rounded-[var(--prd-radius-control)] border border-border bg-background px-3 py-2 shadow-lg">
-      <span className="text-sm">{chosen.length} selected</span>
+      <span className="text-sm">{chosen.length} to fix</span>
       <Button size="sm" onClick={() => void run()} disabled={busy}>
         <Glyph name="fix" className="size-3.5" />
-        {busy ? "Sending…" : "Fix with agent"}
+        {busy ? "Sending…" : "Send to agent"}
       </Button>
       <Button size="sm" variant="ghost" onClick={onClear} disabled={busy}>
         Clear
