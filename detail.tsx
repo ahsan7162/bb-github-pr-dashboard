@@ -11,6 +11,8 @@ import {
   canSubmitReview,
   findingsPrompt,
   fixPrompt,
+  fixSubjects,
+  subjectKey,
   jiraHref,
   jiraPrefixes,
   jiraSite,
@@ -219,6 +221,8 @@ function Composer({
 
 /** The PR on screen, for "Fix with agent" buttons deep in the tabs. */
 const PrContext = createContext<PrDetail | null>(null);
+/** Findings picked to go to the agent together, by subjectKey; held by the detail view so picks survive tab switches. */
+const BatchContext = createContext<{ keys: string[]; toggle: (key: string) => void } | null>(null);
 
 /** Sends a comment or failed job to the bb thread on this PR's branch, else opens a new thread prefilled with it. */
 /**
@@ -254,6 +258,7 @@ function useHandOff() {
 
 function FixWithAgent({ subject }: { subject: FixSubject }) {
   const pr = useContext(PrContext);
+  const batch = useContext(BatchContext);
   const { handOff } = useHandOff();
   const [busy, setBusy] = useState(false);
   if (!pr) return null;
@@ -265,11 +270,53 @@ function FixWithAgent({ subject }: { subject: FixSubject }) {
       setBusy(false);
     }
   };
-  return (
+  const fix = (
     <Button size="sm" variant="outline" onClick={run} disabled={busy}>
       <Glyph name="fix" className="size-3.5" />
       Fix with agent
     </Button>
+  );
+  const key = subjectKey(subject);
+  // Drafts and id-less threads can't be batched: fixSubjects leaves them out, so the bar could never send them.
+  if (!batch || !fixSubjects(pr).some((s) => subjectKey(s) === key)) return fix;
+  const added = batch.keys.includes(key);
+  return (
+    <>
+      {fix}
+      <Button size="sm" variant={added ? "secondary" : "ghost"} aria-pressed={added} onClick={() => batch.toggle(key)}>
+        {added ? <Icon name="CircleCheck" className="size-3.5" /> : null}
+        {added ? "Added" : "Add to batch"}
+      </Button>
+    </>
+  );
+}
+
+/** The picked findings, in the PR's order, sent as one prompt; shown under every tab while anything is picked. */
+function BatchBar({ pr, keys, onClear }: { pr: PrDetail; keys: string[]; onClear: () => void }) {
+  const { handOff } = useHandOff();
+  const [busy, setBusy] = useState(false);
+  const chosen = fixSubjects(pr).filter((s) => keys.includes(subjectKey(s)));
+  if (chosen.length === 0) return null;
+  const run = async () => {
+    setBusy(true);
+    try {
+      await handOff(pr, findingsPrompt(pr, chosen), "fix");
+      onClear();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="sticky bottom-3 z-10 mx-auto flex w-fit items-center gap-2 rounded-[var(--prd-radius-control)] border border-border bg-background px-3 py-2 shadow-lg">
+      <span className="text-sm">{chosen.length} selected</span>
+      <Button size="sm" onClick={() => void run()} disabled={busy}>
+        <Glyph name="fix" className="size-3.5" />
+        {busy ? "Sending…" : "Fix with agent"}
+      </Button>
+      <Button size="sm" variant="ghost" onClick={onClear} disabled={busy}>
+        Clear
+      </Button>
+    </div>
   );
 }
 
@@ -1705,10 +1752,7 @@ function LinkToThread({ pr, onClose }: { pr: PrDetail; onClose: () => void }) {
 /** The PR's ⋯ menu: hand it to a thread, ask or explain it, fix what blocks it, copy it, close it. */
 function PrMenu({ pr, onRefresh, onClose, onLink }: { pr: PrDetail; onRefresh: () => void; onClose: () => void; onLink: () => void }) {
   const { handOff } = useHandOff();
-  const subjects: FixSubject[] = [
-    ...pr.threads.filter((t) => !!t.id && !t.isResolved && !t.isPending).map((thread) => ({ kind: "thread" as const, thread })),
-    ...pr.checks.filter((c) => c.status === "failing").map((check) => ({ kind: "check" as const, check })),
-  ];
+  const subjects = fixSubjects(pr);
   const copy = (text: string, what: string) =>
     navigator.clipboard.writeText(text).then(
       () => toast.success(`Copied ${what}`),
@@ -2045,6 +2089,11 @@ export function PrDetailView({
   const [editing, setEditing] = useState(false);
   const [confirmClose, setConfirmClose] = useState(false);
   const [linking, setLinking] = useState(false);
+  const [batch, setBatch] = useState<string[]>([]);
+  const batchContext = useMemo(
+    () => ({ keys: batch, toggle: (key: string) => setBatch((b) => (b.includes(key) ? b.filter((k) => k !== key) : [...b, key])) }),
+    [batch],
+  );
   const [jira, setJira] = useState(cachedJira);
   useEffect(() => {
     if (cachedJira) return;
@@ -2061,6 +2110,7 @@ export function PrDetailView({
     setEditing(false);
     setConfirmClose(false);
     setLinking(false);
+    setBatch([]);
   }, [repo, number]);
   const load = useCallback(() => {
     setLoading(true);
@@ -2483,6 +2533,7 @@ export function PrDetailView({
               </nav>
             ) : null}
             <PrContext.Provider value={detail}>
+            <BatchContext.Provider value={batchContext}>
             <div className="min-w-0">
             {activeTab === "checks" ? <ChecksTab checks={detail.checks} /> : null}
             {activeTab === "files" ? (
@@ -2517,7 +2568,9 @@ export function PrDetailView({
             {activeTab === "conversation" ? (
               <ConversationTab timeline={detail.timeline} prUrl={detail.url} subjectId={detail.id} body={detail.body} canEdit={detail.canEdit} onPosted={load} />
             ) : null}
+            <BatchBar pr={detail} keys={batch} onClear={() => setBatch([])} />
             </div>
+            </BatchContext.Provider>
             </PrContext.Provider>
           </div>
         </div>

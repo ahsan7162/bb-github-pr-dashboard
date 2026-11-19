@@ -1,7 +1,7 @@
 // Run: node --test prs.test.ts   (Node 22.18+ strips the types itself)
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { jiraHref, jiraPrefixes, jiraSite, linkJira, findingsPrompt, projectFor, linkCandidates, agentTarget, canSubmitReview, checkOf, fixPrompt, repoOfRemote, matchesSearch, commentRange, commentTarget, fullPatch, prFromUrl, rangeFromSelection, diffWatch, latestChecks, parsePatch, pushText, reviewEvents, stackOf, threadStatus, toDetail, toFiles, toList, toPr, toWatched, type AgentThread, type RawDetail, type RawPr, type RawWatchPr, type Thread, type Watched } from "./prs.ts";
+import { jiraHref, jiraPrefixes, jiraSite, linkJira, findingsPrompt, fixSubjects, subjectKey, projectFor, linkCandidates, agentTarget, canSubmitReview, checkOf, fixPrompt, repoOfRemote, matchesSearch, commentRange, commentTarget, fullPatch, prFromUrl, rangeFromSelection, diffWatch, latestChecks, parsePatch, pushText, reviewEvents, stackOf, threadStatus, toDetail, toFiles, toList, toPr, toWatched, type AgentThread, type RawDetail, type RawPr, type RawWatchPr, type Thread, type Watched } from "./prs.ts";
 
 const base: RawPr = {
   id: "PR_1",
@@ -540,12 +540,22 @@ test("link candidates: the branch thread, then the project's, then the rest", ()
 
 test("findings prompt: every unresolved thread and failed job, numbered", () => {
   const d = toDetail(rawDetail);
-  const subjects = [
-    ...d.threads.filter((x) => !x.isResolved).map((thread) => ({ kind: "thread" as const, thread })),
-    ...d.checks.filter((c) => c.status === "failing").map((check) => ({ kind: "check" as const, check })),
-  ];
-  const text = findingsPrompt(d, subjects);
+  d.threads.forEach((t, i) => (t.id ||= `th${i}`)); // the fixture's threads have no node ids
+  const text = findingsPrompt(d, fixSubjects(d));
   assert.match(text, /### 1\. Review comment/);
   assert.match(text, /### 3\. Failed CI job/);
   assert.match(text, /Fix what is blocking it on branch `feat`/);
+});
+
+test("fix subjects: resolved threads drop out, same-named checks in two workflows keep distinct keys", () => {
+  const d = toDetail(rawDetail);
+  const thread = { ...d.threads.find((t) => !t.isResolved && !t.isPending)!, id: "live" };
+  const failing = d.checks.find((c) => c.status === "failing")!;
+  const keys = fixSubjects({
+    threads: [thread, { ...thread, id: "gone", isResolved: true }],
+    checks: [failing, { ...failing, workflow: "other" }],
+  }).map(subjectKey);
+  assert.equal(keys.length, 3);
+  assert.equal(new Set(keys).size, 3);
+  assert.ok(!keys.includes("t:gone"));
 });

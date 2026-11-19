@@ -1073,6 +1073,17 @@ export const prPrompts = {
     `${about(pr)}\n\nExplain this pull request. Read its description and diff (\`gh pr view\`, \`gh pr diff\`), then walk me through the change in a sensible reading order: what it does, why, and how the pieces fit. Point out what deserves a close read: risky logic, edge cases, missing tests, anything surprising.`,
 };
 
+/** What can go to an agent now: published unresolved threads, then failed jobs, in the PR's order. */
+export function fixSubjects(pr: Pick<PrDetail, "threads" | "checks">): FixSubject[] {
+  return [
+    ...pr.threads.filter((t) => !!t.id && !t.isResolved && !t.isPending).map((thread) => ({ kind: "thread" as const, thread })),
+    ...pr.checks.filter((c) => c.status === "failing").map((check) => ({ kind: "check" as const, check })),
+  ];
+}
+
+/** A subject's identity across reloads; checks keyed as latestChecks dedupes them. */
+export const subjectKey = (s: FixSubject) => (s.kind === "thread" ? `t:${s.thread.id}` : `c:${s.check.workflow ?? ""}|${s.check.name}`);
+
 /** Every unresolved review thread and failed job in one prompt; each section is what its own Fix with agent would send. */
 export function findingsPrompt(pr: PromptPr, subjects: readonly FixSubject[]): string {
   const sections = subjects.map((s, i) => {
