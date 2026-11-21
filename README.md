@@ -41,7 +41,7 @@ login (`gh auth login`) or a token; see [Requirements](#requirements).
   in My PRs, or on GitHub if My PRs cannot load it. Cmd/Ctrl-click and "Open on
   GitHub" links still go to GitHub.
 
-<img width="2880" height="1800" alt="1-list" src="https://github.com/user-attachments/assets/53b57abd-ab97-4d6f-a499-fe535014b7a9" />
+<!-- IMAGE: drag 01-list.png onto this line in GitHub's web editor, then delete this comment -->
 
 
 
@@ -60,7 +60,7 @@ login (`gh auth login`) or a token; see [Requirements](#requirements).
   ready to merge) and a "New since you last looked" list of alerts.
 - Coming back from a pull request returns you to where you were in the list.
 
-<img width="2880" height="1800" alt="8-reviewed" src="https://github.com/user-attachments/assets/b5645530-66be-4791-877b-c2b661800d5f" />
+<!-- IMAGE: drag 02-reviewed.png onto this line in GitHub's web editor, then delete this comment -->
 
 
 
@@ -71,7 +71,7 @@ and removed, its reviewers with each one's verdict (or that a review is still
 requested), its labels, where it sits in a stack, and its blockers as the headline. A pencil
 beside the title edits it, when GitHub lets you. **Previous** and **Next** step through the list as you left it.
 
-<img width="2880" height="1800" alt="2-overview" src="https://github.com/user-attachments/assets/1caeff5f-f5d7-4f31-ba00-e43f488792a3" />
+<!-- IMAGE: drag 03-overview.png onto this line in GitHub's web editor, then delete this comment -->
 
 
 - **Overview** (first): the description in its own panel, with a pencil to edit it,
@@ -88,10 +88,10 @@ beside the title edits it, when GitHub lets you. **Previous** and **Next** step 
 - On your own pull request, mark a draft **Ready for review** or **Convert to draft**; **close** an open pull
   request (with a confirm step) or **reopen** a closed one.
 
-<img width="2880" height="1800" alt="3-files" src="https://github.com/user-attachments/assets/da77bc58-5ea9-4c2c-8e0c-b3fc66e64993" />
+<!-- IMAGE: drag 04-files.png onto this line in GitHub's web editor, then delete this comment -->
 
 
-<img width="2880" height="1800" alt="4-commits" src="https://github.com/user-attachments/assets/906a1818-efdb-46ec-9c3a-10aa0be19c6b" />
+<!-- IMAGE: drag 05-commits.png onto this line in GitHub's web editor, then delete this comment -->
 
 
 
@@ -118,7 +118,7 @@ at once.
 - Otherwise bb's New thread screen opens with the prompt filled in, in the
   pull request's project (see below), so you choose where it runs.
 
-<img width="2880" height="1800" alt="5-checks" src="https://github.com/user-attachments/assets/821c7618-4b3c-476d-a86c-9329785f350e" />
+<!-- IMAGE: drag 06-checks.png onto this line in GitHub's web editor, then delete this comment -->
 
 
 
@@ -133,7 +133,7 @@ at once.
 
 New threads start in the pull request's project: the one whose git remote is the repository, else one named like it
 (`Billing API` for `acme/billing-api`), but never a guess between two.
-<img width="2880" height="1800" alt="7-menu" src="https://github.com/user-attachments/assets/8ae3d648-78c9-47f1-bfc8-6ab57f1f9475" />
+<!-- IMAGE: drag 07-menu.png onto this line in GitHub's web editor, then delete this comment -->
 
 
 
@@ -151,7 +151,7 @@ finish it as **Comment**, **Approve** or **Request changes**, or discard it. Rep
 any thread where it is, **Resolve** or **Unresolve** it when GitHub lets you, and delete your own comments and replies (after a confirm
 step) from the trash button beside them. Nothing is written to GitHub until you click.
 
-<img width="2880" height="1800" alt="6-comments" src="https://github.com/user-attachments/assets/ce54e487-9e7e-4b9b-9680-a0b4e2372a97" />
+<!-- IMAGE: drag 08-comments.png onto this line in GitHub's web editor, then delete this comment -->
 
 
 
