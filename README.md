@@ -120,6 +120,8 @@ at once.
 
 <!-- IMAGE: drag 06-checks.png onto this line in GitHub's web editor, then delete this comment -->
 
+<!-- IMAGE: drag 07-batch.png onto this line in GitHub's web editor, then delete this comment -->
+
 
 
 ### The ⋯ menu
@@ -133,7 +135,7 @@ at once.
 
 New threads start in the pull request's project: the one whose git remote is the repository, else one named like it
 (`Billing API` for `acme/billing-api`), but never a guess between two.
-<!-- IMAGE: drag 07-menu.png onto this line in GitHub's web editor, then delete this comment -->
+<!-- IMAGE: drag 08-menu.png onto this line in GitHub's web editor, then delete this comment -->
 
 
 
@@ -151,7 +153,7 @@ finish it as **Comment**, **Approve** or **Request changes**, or discard it. Rep
 any thread where it is, **Resolve** or **Unresolve** it when GitHub lets you, and delete your own comments and replies (after a confirm
 step) from the trash button beside them. Nothing is written to GitHub until you click.
 
-<!-- IMAGE: drag 08-comments.png onto this line in GitHub's web editor, then delete this comment -->
+<!-- IMAGE: drag 09-comments.png onto this line in GitHub's web editor, then delete this comment -->
 
 
 
