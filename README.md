@@ -231,7 +231,7 @@ branch (bb's GitHub PR Status may check with GitHub). Alerts and their state sta
 plugin's storage on your bb server. Desktop notifications hand each alert's headline
 (repository, number, who) and pull request title to bb's Push notifications plugin,
 which forwards them to registered phones through its push relay (Expo by default);
-turn `showDesktop` off to keep them on the server. The page loads 105 KB of script and 131 KB of CSS
+turn `showDesktop` off to keep them on the server. The page loads 106 KB of script and 131 KB of CSS
 (32 KB and 10 KB gzipped); an install takes about 11 MB on disk.
 
 ## Develop
