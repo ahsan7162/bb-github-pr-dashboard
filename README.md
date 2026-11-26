@@ -87,6 +87,8 @@ beside the title edits it, when GitHub lets you. **Previous** and **Next** step 
   waits on, and **Show in diff** to jump to its line.
 - On your own pull request, mark a draft **Ready for review** or **Convert to draft**; **close** an open pull
   request (with a confirm step) or **reopen** a closed one.
+- Once every check is green, **Merge** an open pull request (with a confirm step), using the repo's
+  default merge method. The merge is refused if new commits landed after the checks you saw.
 
 <img width="3200" height="2000" alt="04-files" src="https://github.com/user-attachments/assets/802b360d-9aed-48ba-b7b4-925fba29c856" />
 

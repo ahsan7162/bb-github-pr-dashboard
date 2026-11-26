@@ -71,8 +71,8 @@ export const PR_DETAIL_QUERY = `query($owner: String!, $name: String!, $number: 
   viewer { login }
   repository(owner: $owner, name: $name) { pullRequest(number: $number) {
     id number title url isDraft state createdAt body changedFiles additions deletions viewerCanUpdate
-    author { login avatarUrl(size: 64) } headRefName baseRefName reviewDecision mergeable
-    repository { nameWithOwner defaultBranchRef { name } } ${STACK}
+    author { login avatarUrl(size: 64) } headRefName headRefOid baseRefName reviewDecision mergeable
+    repository { nameWithOwner defaultBranchRef { name } viewerDefaultMergeMethod } ${STACK}
     reviewThreads(first: 100) { nodes {
       id isResolved isOutdated viewerCanResolve viewerCanUnresolve path line originalLine startLine diffSide resolvedBy { login }
       comments(first: 50) { nodes { ${COMMENT} diffHunk state } }
@@ -180,6 +180,11 @@ export const REOPEN_PR_MUTATION = `mutation($prId: ID!) {
 
 export const READY_PR_MUTATION = `mutation($prId: ID!) {
   markPullRequestReadyForReview(input: { pullRequestId: $prId }) { pullRequest { state } }
+}`;
+
+// expectedHeadOid: GitHub refuses if someone pushed after the checks you saw.
+export const MERGE_PR_MUTATION = `mutation($prId: ID!, $headOid: GitObjectID!, $method: PullRequestMergeMethod!) {
+  mergePullRequest(input: { pullRequestId: $prId, expectedHeadOid: $headOid, mergeMethod: $method }) { pullRequest { state } }
 }`;
 
 export const DRAFT_PR_MUTATION = `mutation($prId: ID!) {

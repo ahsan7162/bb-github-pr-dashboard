@@ -1,7 +1,7 @@
 // Run: node --test prs.test.ts   (Node 22.18+ strips the types itself)
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { jiraHref, jiraPrefixes, jiraSite, linkJira, findingsPrompt, fixSubjects, subjectKey, projectFor, linkCandidates, agentTarget, canSubmitReview, checkOf, fixPrompt, repoOfRemote, matchesSearch, commentRange, commentTarget, fullPatch, prFromUrl, rangeFromSelection, diffWatch, latestChecks, parsePatch, pushText, reviewEvents, stackOf, threadStatus, toDetail, toFiles, toList, toPr, toWatched, type AgentThread, type RawDetail, type RawPr, type RawWatchPr, type Thread, type Watched } from "./prs.ts";
+import { canMerge, jiraHref, jiraPrefixes, jiraSite, linkJira, findingsPrompt, fixSubjects, subjectKey, projectFor, linkCandidates, agentTarget, canSubmitReview, checkOf, fixPrompt, repoOfRemote, matchesSearch, commentRange, commentTarget, fullPatch, prFromUrl, rangeFromSelection, diffWatch, latestChecks, parsePatch, pushText, reviewEvents, stackOf, threadStatus, toDetail, toFiles, toList, toPr, toWatched, type AgentThread, type RawDetail, type RawPr, type RawWatchPr, type Thread, type Watched } from "./prs.ts";
 
 const base: RawPr = {
   id: "PR_1",
@@ -558,4 +558,21 @@ test("fix subjects: resolved threads drop out, same-named checks in two workflow
   assert.equal(keys.length, 3);
   assert.equal(new Set(keys).size, 3);
   assert.ok(!keys.includes("t:gone"));
+});
+
+test("merge only when open, not a draft, conflict-free and every check green", () => {
+  const green = structuredClone(rawDetail);
+  green.headRefOid = "a".repeat(40);
+  green.repository.viewerDefaultMergeMethod = "SQUASH";
+  green.commits.nodes[0]!.commit.statusCheckRollup!.contexts.nodes[1]!.state = "SUCCESS";
+  const d = toDetail(green);
+  assert.equal(d.mergeMethod, "SQUASH");
+  assert.equal(canMerge(d), true);
+  assert.equal(canMerge(toDetail({ ...green, headRefOid: undefined })), false);
+  assert.equal(canMerge({ ...toDetail(rawDetail), headOid: d.headOid }), false); // a failing check
+  assert.equal(canMerge({ ...d, checks: [] }), false); // no CI: nothing is green
+  assert.equal(canMerge({ ...d, isDraft: true }), false);
+  assert.equal(canMerge({ ...d, conflicts: true }), false);
+  assert.equal(canMerge({ ...d, state: "CLOSED" }), false);
+  assert.equal(toDetail(rawDetail).mergeMethod, "MERGE");
 });

@@ -41,6 +41,7 @@ import {
   DELETE_ISSUE_COMMENT_MUTATION,
   DELETE_REVIEW_COMMENT_MUTATION,
   READY_PR_MUTATION,
+  MERGE_PR_MUTATION,
   REOPEN_PR_MUTATION,
   updatePrMutation,
   REVIEW_DISCARD_MUTATION,
@@ -109,6 +110,8 @@ const detailSchema = z.object({
   state: z.string(),
   isDraft: z.boolean(),
   headRefName: z.string(),
+  headOid: z.string(),
+  mergeMethod: z.enum(["MERGE", "SQUASH", "REBASE"]),
   baseRefName: z.string(),
   onDefaultBranch: z.boolean(),
   stackedOn: stackSchema,
@@ -316,6 +319,12 @@ export const rpcContract = defineRpcContract({
   },
   pr_set_state: {
     input: z.object({ prId: nodeId, action: z.enum(["close", "reopen", "ready", "draft"]) }).strict(),
+    output: z.object({ state: z.string() }),
+  },
+  pr_merge: {
+    input: z
+      .object({ prId: nodeId, headOid: z.string().regex(/^[0-9a-f]{40}$/, "Expected a commit id"), method: z.enum(["MERGE", "SQUASH", "REBASE"]) })
+      .strict(),
     output: z.object({ state: z.string() }),
   },
   /** Read-only: which bb thread works on this PR's branch, else which project a new thread should start in. */
@@ -764,6 +773,16 @@ export default async function plugin(bb: BbPluginApi) {
       );
       const pr = Object.values(data)[0]?.pullRequest;
       if (!pr) throw new Error(`GitHub did not change the pull request (${action})`);
+      return { state: pr.state };
+    },
+    pr_merge: async ({ prId, headOid, method }) => {
+      const data = await graphql<{ mergePullRequest: { pullRequest: { state: string } | null } | null }>(
+        MERGE_PR_MUTATION,
+        { prId, headOid, method },
+        { mutation: true },
+      );
+      const pr = data.mergePullRequest?.pullRequest;
+      if (!pr) throw new Error("GitHub did not merge the pull request");
       return { state: pr.state };
     },
     pr_agent_target: async ({ repo, number, headRefName }) => {

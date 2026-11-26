@@ -22,6 +22,7 @@ A **My PRs** page in the bb navigation rail for every pull request (PR) you are 
 - A menu to link the PR to a thread, ask about it, explain it, fix all findings, copy it or close it.
 - Jira keys open in bb's My Jira plugin when it runs, else on your Jira site.
 - Mark your draft Ready for review (or back), close an open PR (with a confirm step), or reopen one.
+- Merge an open PR once every check is green (with a confirm step), using the repo's default merge method.
 
 ## Alerts
 

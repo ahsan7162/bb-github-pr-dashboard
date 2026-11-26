@@ -8,6 +8,7 @@ import { Markdown, UrlLink, experimental_useCodeTheme, useBbNavigate, useRpc, us
 import { PatchDiff, type DiffLineAnnotation, type SelectedLineRange } from "@pierre/diffs/react";
 import type { rpcContract } from "./server";
 import {
+  canMerge,
   canSubmitReview,
   findingsPrompt,
   fixPrompt,
@@ -1821,6 +1822,45 @@ function DraftButton({ prId, state, isDraft, onDone }: { prId: string; state: st
   );
 }
 
+const MERGE_LABEL = { MERGE: "Merge", SQUASH: "Squash and merge", REBASE: "Rebase and merge" } as const;
+
+/** Merge once every check is green, with a confirm step; merges the head commit those checks ran on. */
+function MergeButton({ detail, onDone }: { detail: PrDetail; onDone: () => void }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  if (!canMerge(detail)) return null;
+  const label = MERGE_LABEL[detail.mergeMethod];
+  const run = async () => {
+    setBusy(true);
+    try {
+      await rpc.call("pr_merge", { prId: detail.id, headOid: detail.headOid, method: detail.mergeMethod });
+      toast.success("Pull request merged");
+      onDone();
+    } catch (cause) {
+      toast.error(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(false);
+      setConfirming(false);
+    }
+  };
+  return confirming ? (
+    <>
+      <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirming(false)}>
+        Cancel
+      </Button>
+      <Button size="sm" disabled={busy} onClick={() => void run()}>
+        {busy ? "Merging…" : `Confirm ${label.toLowerCase()}`}
+      </Button>
+    </>
+  ) : (
+    <Button size="sm" onClick={() => setConfirming(true)}>
+      <Icon name="GitMerge" className="size-3.5" />
+      {label}
+    </Button>
+  );
+}
+
 /** A small pencil button; bb's icon set has no pencil, so it is drawn here. */
 function EditButton({ label, onClick }: { label: string; onClick: () => void }) {
   return (
@@ -2363,6 +2403,15 @@ export function PrDetailView({
               />
             ) : null}
             {detail ? (
+              <MergeButton
+                detail={detail}
+                onDone={() => {
+                  load();
+                  onStateChanged();
+                }}
+              />
+            ) : null}
+            {detail ? (
               <StateButton
                 prId={detail.id}
                 state={detail.state}
@@ -2374,7 +2423,9 @@ export function PrDetailView({
                 }}
               />
             ) : null}
-            {loading ? <Icon name="RotateCcw" className="size-4 animate-spin text-muted-foreground" aria-label="Refreshing" /> : null}
+            <Button variant="ghost" size="icon" aria-label={loading ? "Refreshing" : "Refresh"} disabled={loading} onClick={load}>
+              <Icon name="RotateCcw" className={cn("size-4", loading && "animate-spin")} />
+            </Button>
             <UrlLink
               href={`https://github.com/${repo}/pull/${number}`}
               className="inline-flex h-8 items-center gap-1.5 rounded-[var(--prd-radius-control)] border border-border px-3 text-xs font-medium transition-colors duration-[var(--prd-hover)] ease-[var(--prd-ease-out)] hover:bg-accent"

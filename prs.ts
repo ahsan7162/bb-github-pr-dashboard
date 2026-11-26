@@ -395,6 +395,10 @@ export interface PrDetail {
   state: string;
   isDraft: boolean;
   headRefName: string;
+  /** The head commit the checks below ran on; a merge is refused if the branch moved. */
+  headOid: string;
+  /** The method GitHub's merge button would offer you first in this repo. */
+  mergeMethod: MergeMethod;
   baseRefName: string;
   onDefaultBranch: boolean;
   stackedOn: StackRef | null;
@@ -453,10 +457,11 @@ export interface RawDetail {
   body: string;
   author: RawAuthor;
   headRefName: string;
+  headRefOid?: string;
   baseRefName: string;
   reviewDecision: string | null;
   mergeable: string;
-  repository: { nameWithOwner: string; defaultBranchRef?: { name: string } | null };
+  repository: { nameWithOwner: string; defaultBranchRef?: { name: string } | null; viewerDefaultMergeMethod?: MergeMethod };
   reviewThreads: {
     nodes: {
       id?: string;
@@ -587,6 +592,8 @@ export function toDetail(raw: RawDetail, viewer = ""): PrDetail {
     state: raw.state,
     isDraft: raw.isDraft,
     headRefName: raw.headRefName,
+    headOid: raw.headRefOid ?? "",
+    mergeMethod: raw.repository.viewerDefaultMergeMethod ?? "MERGE",
     baseRefName: raw.baseRefName,
     ...stackOf(raw),
     changedFiles: raw.changedFiles ?? 0,
@@ -858,6 +865,14 @@ export function commentRange(rows: DiffLine[], a: number, b: number): CommentRan
   if (!end || !begin) return null;
   if (rows.slice(from, to + 1).some((r) => r.kind === "hunk")) return null;
   return { ...end, start: from === to ? null : begin };
+}
+
+export type MergeMethod = "MERGE" | "SQUASH" | "REBASE";
+
+/** Open, not a draft, no conflicts, and at least one check with every check green; GitHub enforces the rest. */
+export function canMerge(d: Pick<PrDetail, "state" | "isDraft" | "conflicts" | "checks" | "headOid">): boolean {
+  return d.state === "OPEN" && !d.isDraft && !d.conflicts && d.headOid !== "" &&
+    d.checks.length > 0 && d.checks.every((c) => c.status === "passing" || c.status === "skipped");
 }
 
 export type ReviewEvent = "COMMENT" | "APPROVE" | "REQUEST_CHANGES";
